@@ -128,12 +128,17 @@ class AgenticVLMConfig(_ConfigBase):
     relying on the pre-generated text descriptions produced at ingest time.
     The same VLM routing applies to verify_execute tasks.
 
+    Generation parameters follow the Nemotron Omni reasoning-mode defaults
+    documented in docs/vlm.md: temperature=0.6, top_p=0.95, max_tokens=16384.
+
     Env vars:
         AGENTIC_VLM_ENABLED              — master switch (default: false)
         AGENTIC_VLM_SERVERURL            — VLM endpoint URL
         AGENTIC_VLM_MODEL                — VLM model name
         AGENTIC_VLM_APIKEY               — optional API key override
-        AGENTIC_VLM_MAX_TOKENS           — max tokens per VLM response (default: 1024)
+        AGENTIC_VLM_MAX_TOKENS           — max tokens per VLM response (default: 16384)
+        AGENTIC_VLM_TEMPERATURE          — sampling temperature (default: 0.6)
+        AGENTIC_VLM_TOP_P                — nucleus sampling mass (default: 0.95)
         AGENTIC_VLM_ENABLE_VISUAL_VERIFY — reserved for future visual fact-checking
                                            in the verify node (default: false)
     """
@@ -154,7 +159,7 @@ class AgenticVLMConfig(_ConfigBase):
     model_name: str = Field(
         default="",
         env="AGENTIC_VLM_MODEL",
-        description="VLM model name (e.g. nvidia/llama-3.2-90b-vision-instruct).",
+        description="VLM model name (e.g. nvidia/nemotron-3-nano-omni-30b-a3b-reasoning).",
     )
     api_key: SecretStr | None = Field(
         default=None,
@@ -162,9 +167,25 @@ class AgenticVLMConfig(_ConfigBase):
         description="API key for the VLM endpoint. Falls back to NVIDIA_API_KEY if unset.",
     )
     max_tokens: int = Field(
-        default=1024,
+        default=16384,
         env="AGENTIC_VLM_MAX_TOKENS",
-        description="Max generated tokens for VLM responses.",
+        description="Max generated tokens for VLM responses (includes reasoning tokens).",
+    )
+    temperature: float = Field(
+        default=0.6,
+        env="AGENTIC_VLM_TEMPERATURE",
+        description=(
+            "Sampling temperature for VLM responses. "
+            "0.6 is the Nemotron Omni reasoning-mode default (docs/vlm.md)."
+        ),
+    )
+    top_p: float = Field(
+        default=0.95,
+        env="AGENTIC_VLM_TOP_P",
+        description=(
+            "Nucleus sampling mass for VLM responses. "
+            "0.95 is the Nemotron Omni reasoning-mode default (docs/vlm.md)."
+        ),
     )
     enable_visual_verify: bool = Field(
         default=False,

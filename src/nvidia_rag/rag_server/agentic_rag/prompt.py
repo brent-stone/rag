@@ -305,7 +305,8 @@ Check the answer quality and identify any retrieval gaps:"""
 # directly in plain text and the caller wraps it in a completeness dict.
 # =============================================================================
 
-VLM_TASK_SYSTEM_PROMPT = """You are an expert at reading charts, diagrams, tables, and images.
+VLM_TASK_SYSTEM_PROMPT = """/think
+You are an expert at reading charts, diagrams, tables, and images.
 You are given an image and a specific question about its content.
 Answer the question directly and precisely based only on what is visually present in the image.
 Report numbers, labels, and values exactly as they appear — do not round or reformat.

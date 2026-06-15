@@ -361,10 +361,12 @@ def _make_vlm_client(vlm_cfg: Any, rag_config: Any) -> Any:
 
     api_key = vlm_cfg.get_api_key() or rag_config.llm.get_api_key()
     logger.debug(
-        "Creating agentic VLM client: model=%s, url=%s, max_tokens=%s",
+        "Creating agentic VLM client: model=%s, url=%s, max_tokens=%s, temperature=%s, top_p=%s",
         vlm_cfg.model_name,
         vlm_cfg.server_url or "(api-catalog)",
         vlm_cfg.max_tokens,
+        vlm_cfg.temperature,
+        vlm_cfg.top_p,
     )
     return get_llm(
         config=rag_config,
@@ -372,6 +374,8 @@ def _make_vlm_client(vlm_cfg: Any, rag_config: Any) -> Any:
         llm_endpoint=vlm_cfg.server_url,
         api_key=api_key,
         max_tokens=vlm_cfg.max_tokens,
+        temperature=vlm_cfg.temperature,
+        top_p=vlm_cfg.top_p,
     )
 
 
