@@ -130,17 +130,21 @@ class AgenticVLMConfig(_ConfigBase):
 
     Generation parameters follow the Nemotron Omni reasoning-mode defaults
     documented in docs/vlm.md: temperature=0.6, top_p=0.95, max_tokens=16384.
+    Reasoning mode mirrors the standard VLM config (APP_VLM_ENABLE_THINKING /
+    APP_VLM_THINKING_TOKEN_BUDGET) but with agentic-specific env var prefixes.
 
     Env vars:
-        AGENTIC_VLM_ENABLED              — master switch (default: false)
-        AGENTIC_VLM_SERVERURL            — VLM endpoint URL
-        AGENTIC_VLM_MODEL                — VLM model name
-        AGENTIC_VLM_APIKEY               — optional API key override
-        AGENTIC_VLM_MAX_TOKENS           — max tokens per VLM response (default: 16384)
-        AGENTIC_VLM_TEMPERATURE          — sampling temperature (default: 0.6)
-        AGENTIC_VLM_TOP_P                — nucleus sampling mass (default: 0.95)
-        AGENTIC_VLM_ENABLE_VISUAL_VERIFY — reserved for future visual fact-checking
-                                           in the verify node (default: false)
+        AGENTIC_VLM_ENABLED                — master switch (default: false)
+        AGENTIC_VLM_SERVERURL              — VLM endpoint URL
+        AGENTIC_VLM_MODEL                  — VLM model name
+        AGENTIC_VLM_APIKEY                 — optional API key override
+        AGENTIC_VLM_MAX_TOKENS             — max tokens per VLM response (default: 16384)
+        AGENTIC_VLM_TEMPERATURE            — sampling temperature (default: 0.6)
+        AGENTIC_VLM_TOP_P                  — nucleus sampling mass (default: 0.95)
+        AGENTIC_VLM_ENABLE_THINKING        — enable chain-of-thought reasoning (default: false)
+        AGENTIC_VLM_THINKING_TOKEN_BUDGET  — max reasoning tokens; 0 = no cap (default: 0)
+        AGENTIC_VLM_ENABLE_VISUAL_VERIFY   — reserved for future visual fact-checking
+                                             in the verify node (default: false)
     """
 
     enabled: bool = Field(
@@ -185,6 +189,24 @@ class AgenticVLMConfig(_ConfigBase):
         description=(
             "Nucleus sampling mass for VLM responses. "
             "0.95 is the Nemotron Omni reasoning-mode default (docs/vlm.md)."
+        ),
+    )
+    enable_thinking: bool = Field(
+        default=False,
+        env="AGENTIC_VLM_ENABLE_THINKING",
+        description=(
+            "Enable chain-of-thought reasoning for the VLM "
+            "(e.g. nvidia/nemotron-3-nano-omni-30b-a3b-reasoning). "
+            "Mirrors APP_VLM_ENABLE_THINKING for the standard VLM pipeline."
+        ),
+    )
+    thinking_token_budget: int = Field(
+        default=0,
+        env="AGENTIC_VLM_THINKING_TOKEN_BUDGET",
+        description=(
+            "Maximum tokens the VLM may use for reasoning (0 = no budget cap). "
+            "Only applied when enable_thinking is True. "
+            "Mirrors APP_VLM_THINKING_TOKEN_BUDGET for the standard VLM pipeline."
         ),
     )
     enable_visual_verify: bool = Field(
