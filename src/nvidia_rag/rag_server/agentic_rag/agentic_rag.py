@@ -1193,7 +1193,7 @@ class AgenticRag:
                 vlm_answers: list[dict] = []
                 if visual_chunks:
                     vlm_coros = [
-                        self._call_vlm_for_task(self._get_image_data_url(c), question)
+                        self._call_vlm_for_task(self._get_image_data_url(c), task_question)
                         for c in visual_chunks
                         if self._get_image_data_url(c)
                     ]
