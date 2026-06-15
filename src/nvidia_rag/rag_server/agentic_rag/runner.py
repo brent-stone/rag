@@ -77,6 +77,7 @@ from nvidia_rag.rag_server.response_generator import (
 
 if TYPE_CHECKING:
     from nvidia_rag.rag_server.agentic_rag.agentic_rag import AgenticRag
+    from nvidia_rag.rag_server.agentic_rag.query_router import RoutingDecision
     from nvidia_rag.utils.agentic_rag_config import AgenticRAGConfig
     from nvidia_rag.utils.observability.otel_metrics import OtelMetrics
 
@@ -165,6 +166,8 @@ async def run_agentic_pipeline(
     runtime_temperature_override: float | None = None,
     runtime_top_p_override: float | None = None,
     runtime_max_tokens_override: int | None = None,
+    runtime_enable_thinking_overrides: dict[str, bool] | None = None,
+    routing_decision: RoutingDecision | None = None,
 ) -> RAGResponse:
     """Run the compiled agentic RAG graph for one request and return a RAGResponse.
 
@@ -225,6 +228,8 @@ async def run_agentic_pipeline(
             runtime_temperature_override=runtime_temperature_override,
             runtime_top_p_override=runtime_top_p_override,
             runtime_max_tokens_override=runtime_max_tokens_override,
+            runtime_enable_thinking_overrides=runtime_enable_thinking_overrides,
+            routing_decision=routing_decision,
         )
 
     # ------------------------------------------------------------------
@@ -242,6 +247,7 @@ async def run_agentic_pipeline(
         or runtime_temperature_override is not None
         or runtime_top_p_override is not None
         or runtime_max_tokens_override is not None
+        or bool(runtime_enable_thinking_overrides)
     )
     if has_runtime_override:
         override_token = _agentic_llm_overrides.set(
@@ -252,6 +258,7 @@ async def run_agentic_pipeline(
                 temperature=runtime_temperature_override,
                 top_p=runtime_top_p_override,
                 max_tokens=runtime_max_tokens_override,
+                enable_thinking_by_role=runtime_enable_thinking_overrides,
             )
         )
 
@@ -362,6 +369,8 @@ async def _run_streaming(
     runtime_temperature_override: float | None = None,
     runtime_top_p_override: float | None = None,
     runtime_max_tokens_override: int | None = None,
+    runtime_enable_thinking_overrides: dict[str, bool] | None = None,
+    routing_decision: RoutingDecision | None = None,
 ) -> RAGResponse:
     """Build a RAGResponse whose generator delegates to ``translate_graph_stream``.
 
@@ -411,6 +420,7 @@ async def _run_streaming(
             or runtime_temperature_override is not None
             or runtime_top_p_override is not None
             or runtime_max_tokens_override is not None
+            or bool(runtime_enable_thinking_overrides)
         )
         if has_runtime_override:
             override_token = _agentic_llm_overrides.set(
@@ -421,6 +431,7 @@ async def _run_streaming(
                     temperature=runtime_temperature_override,
                     top_p=runtime_top_p_override,
                     max_tokens=runtime_max_tokens_override,
+                    enable_thinking_by_role=runtime_enable_thinking_overrides,
                 )
             )
         try:
@@ -437,6 +448,7 @@ async def _run_streaming(
                     enable_debug_stream=debug_stream,
                     rag_start_time_sec=rag_start_time_sec,
                     on_complete=_on_complete,
+                    routing_decision=routing_decision,
                 ):
                     yield sse
                 root_span.set_attribute("output.value", trace.final_answer or "")
@@ -447,9 +459,9 @@ async def _run_streaming(
             agent.metrics.update(trace)
             _record_agentic_query_metrics(
                 metrics,
-            trace,
-            status="error",
-            verification_enabled=verification_enabled,
+                trace,
+                status="error",
+                verification_enabled=verification_enabled,
             )
             metrics_recorded = True
             logger.info("[AGENTIC_RAG] Query failed: %s", trace.one_line_summary())

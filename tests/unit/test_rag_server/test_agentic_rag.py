@@ -1038,6 +1038,206 @@ class TestAgenticLLMOverrides:
         assert sorted(results) == ["model-A", "model-B"]
 
 
+class TestAgenticThinkingRouterOverride:
+    """Per-query reasoning routing: the query router sets a per-role
+    ``enable_thinking`` override on ``AgenticLLMOverrides.enable_thinking_by_role``.
+    It must (a) flow into each role's rebuilt LLM with the right flag, (b) not
+    collapse roles to one shared client, and (c) not leak across requests."""
+
+    def test_per_role_thinking_flag_threaded_into_get_llm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict] = []
+
+        def fake_get_llm(**kwargs):
+            calls.append(kwargs)
+            return MagicMock(name="thinking-llm")
+
+        monkeypatch.setattr("nvidia_rag.utils.llm.get_llm", fake_get_llm)
+
+        agent = _minimal_agent()
+        # Only task + synthesis are routed; planner/seed_gen omitted -> their
+        # thinking falls back to config (None here, since _minimal_agent has no
+        # rag_config).
+        token = _agentic_llm_overrides.set(
+            AgenticLLMOverrides(
+                enable_thinking_by_role={"task": True, "synthesis": False}
+            )
+        )
+        try:
+            # Touch every role property once (each builds its own client).
+            _ = agent.planner_llm
+            _ = agent.task_llm
+            _ = agent.seed_gen_llm
+            _ = agent.synthesis_llm
+        finally:
+            _agentic_llm_overrides.reset(token)
+
+        thinking_by_call = [c["enable_thinking"] for c in calls]
+        # planner, task, seed_gen, synthesis — in access order above.
+        assert thinking_by_call == [None, True, None, False]
+
+    def test_thinking_override_does_not_leak_across_requests(self) -> None:
+        agent = _minimal_agent()
+        token = _agentic_llm_overrides.set(
+            AgenticLLMOverrides(enable_thinking_by_role={"task": False})
+        )
+        try:
+            # Inside the override context, has_any_override() is True so the
+            # role property goes through the rebuild path.
+            assert _agentic_llm_overrides.get().has_any_override() is True
+        finally:
+            _agentic_llm_overrides.reset(token)
+        # After reset, the cached defaults are returned unchanged.
+        assert agent.task_llm is agent._default_task_llm
+        assert agent.synthesis_llm is agent._default_synthesis_llm
+
+    def test_thinking_with_model_override_keeps_per_role_clients(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # When a model override AND per-role thinking are both present, roles must
+        # NOT collapse to one shared client (each needs its own thinking flag),
+        # yet every role still uses the overridden model.
+        calls: list[dict] = []
+
+        def fake_get_llm(**kwargs):
+            calls.append(kwargs)
+            return MagicMock(name=f"llm-{len(calls)}")
+
+        monkeypatch.setattr("nvidia_rag.utils.llm.get_llm", fake_get_llm)
+
+        agent = _minimal_agent()
+        token = _agentic_llm_overrides.set(
+            AgenticLLMOverrides(
+                model="custom/model-x",
+                enable_thinking_by_role={"task": True, "synthesis": False},
+            )
+        )
+        try:
+            task_llm = agent.task_llm
+            synth_llm = agent.synthesis_llm
+        finally:
+            _agentic_llm_overrides.reset(token)
+
+        # Two distinct clients (no __shared__ collapse).
+        assert task_llm is not synth_llm
+        assert len(calls) == 2
+        assert all(c["model"] == "custom/model-x" for c in calls)
+        assert calls[0]["enable_thinking"] is True  # task
+        assert calls[1]["enable_thinking"] is False  # synthesis
+
+
+class TestAgenticRoutingStageEvent:
+    """Per-query reasoning router (PR): when a ``routing_decision`` is passed to
+    the streaming pipeline, a ``query_routing`` stage_start/stage_end pair is
+    emitted as the FIRST two SSE chunks (before any graph node), reusing the
+    stream id. When no decision is passed, nothing is emitted."""
+
+    class _FakeChunk:
+        def __init__(self, content: str = "", reasoning: str | None = None) -> None:
+            self.content = content
+            self.additional_kwargs = (
+                {"reasoning_content": reasoning} if reasoning else {}
+            )
+            self.usage_metadata = None
+
+    @staticmethod
+    async def _fake_astream(_state, *, config, stream_mode):  # noqa: ARG004
+        # One real graph stage so we can assert routing precedes it.
+        yield (
+            "custom",
+            {
+                "node": "plan",
+                "event": "stage_start",
+                "key": "plan.start.scope",
+                "params": {},
+            },
+        )
+        yield (
+            "messages",
+            (
+                TestAgenticRoutingStageEvent._FakeChunk(content="answer"),
+                {"langgraph_node": "synthesize"},
+            ),
+        )
+
+    class _Agent:
+        def __init__(self) -> None:
+            self.metrics = AgentMetrics()
+            self.verification_cfg = SimpleNamespace(enabled=False)
+
+    async def _run(self, routing_decision):
+        graph = MagicMock()
+        graph.astream = self._fake_astream
+        resp = await run_agentic_pipeline(
+            agent=self._Agent(),
+            graph=graph,
+            query="q",
+            cfg=AgenticRAGConfig(),
+            search_params=AgenticSearchParams(),
+            enable_streaming=True,
+            routing_decision=routing_decision,
+        )
+        assert resp.status_code == ErrorCodeMapping.SUCCESS
+        chunks = [c async for c in resp.generator]
+        return [json.loads(c.removeprefix("data: ").strip()) for c in chunks]
+
+    @pytest.mark.asyncio
+    async def test_simple_decision_emits_routing_pair_first(self) -> None:
+        from nvidia_rag.rag_server.agentic_rag.query_router import RoutingDecision
+        from nvidia_rag.rag_server.agentic_rag.streaming import USER_FACING_LABELS
+
+        decision = RoutingDecision(
+            label="simple", thinking=False, uncertain=False, reason="lookup"
+        )
+        parsed = await self._run(decision)
+
+        # First two chunks are the routing stage_start then stage_end.
+        assert parsed[0]["event_type"] == "stage_start"
+        assert parsed[0]["stage"] == "query_routing"
+        assert parsed[1]["event_type"] == "stage_end"
+        assert parsed[1]["stage"] == "query_routing"
+
+        # Same stream id across routing chunks and the rest of the response.
+        assert parsed[0]["id"] == parsed[1]["id"] == parsed[-1]["id"]
+
+        # Labels come from USER_FACING_LABELS (single source of truth).
+        assert (
+            parsed[0]["choices"][0]["message"]["reasoning_content"]
+            == USER_FACING_LABELS["query_routing.start"]
+        )
+        assert (
+            parsed[1]["choices"][0]["message"]["reasoning_content"]
+            == USER_FACING_LABELS["query_routing.end.simple"]
+        )
+
+        # Routing precedes the first graph stage (plan).
+        plan_idx = next(i for i, p in enumerate(parsed) if p.get("stage") == "plan")
+        assert plan_idx > 1
+
+    @pytest.mark.asyncio
+    async def test_complex_decision_uses_complex_end_label(self) -> None:
+        from nvidia_rag.rag_server.agentic_rag.query_router import RoutingDecision
+        from nvidia_rag.rag_server.agentic_rag.streaming import USER_FACING_LABELS
+
+        decision = RoutingDecision(
+            label="complex", thinking=True, uncertain=False, reason="computation"
+        )
+        parsed = await self._run(decision)
+        assert parsed[1]["stage"] == "query_routing"
+        assert (
+            parsed[1]["choices"][0]["message"]["reasoning_content"]
+            == USER_FACING_LABELS["query_routing.end.complex"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_decision_emits_no_routing_chunks(self) -> None:
+        parsed = await self._run(None)
+        assert all(p.get("stage") != "query_routing" for p in parsed)
+        # First chunk is the pre-existing first event (the plan stage_start).
+        assert parsed[0]["stage"] == "plan"
+
+
 class TestBuildAgenticRagAgentSignature:
     """Ensure the factory remains awaitable (import-time contract)."""
 
@@ -1284,9 +1484,7 @@ class TestAgenticRuntimeGenerationParamOverrides:
             rag_config=cfg,
         )
 
-        token = _agentic_llm_overrides.set(
-            AgenticLLMOverrides(temperature=0.77)
-        )
+        token = _agentic_llm_overrides.set(AgenticLLMOverrides(temperature=0.77))
         try:
             # Each role builds its own client because model/endpoint are NOT
             # overridden — generation-param-only override doesn't collapse roles.
@@ -1407,9 +1605,7 @@ class TestAgenticRuntimeGenerationParamOverrides:
             rag_config=cfg,
         )
 
-        token = _agentic_llm_overrides.set(
-            AgenticLLMOverrides(temperature=0.05)
-        )
+        token = _agentic_llm_overrides.set(AgenticLLMOverrides(temperature=0.05))
         try:
             _ = agent.task_llm
         finally:
@@ -1531,9 +1727,15 @@ class TestAgenticRuntimeGenerationParamOverrides:
         assert task_calls, "expected get_llm call with task/m model"
         kw = task_calls[0]
         # Thinking params must come from task role config, NOT global config.
-        assert kw["enable_thinking"] is False, "task role thinking must be False even when global is True"
-        assert kw["reasoning_budget"] == 0, "task role budget must be 0 even when global is 256"
-        assert kw["low_effort"] is False, "task role low_effort must be False even when global is True"
+        assert kw["enable_thinking"] is False, (
+            "task role thinking must be False even when global is True"
+        )
+        assert kw["reasoning_budget"] == 0, (
+            "task role budget must be 0 even when global is 256"
+        )
+        assert kw["low_effort"] is False, (
+            "task role low_effort must be False even when global is True"
+        )
 
 
 class TestAgenticRoleThinkingParamFallback:
@@ -1577,9 +1779,15 @@ class TestAgenticRoleThinkingParamFallback:
         cfg = NvidiaRAGConfig()
         for role_name in ("planner_llm", "task_llm", "seed_gen_llm", "synthesis_llm"):
             role_cfg = getattr(cfg.agentic_rag, role_name)
-            assert role_cfg.enable_thinking is False, f"{role_name}.enable_thinking should default to False"
-            assert role_cfg.reasoning_budget == 0, f"{role_name}.reasoning_budget should default to 0"
-            assert role_cfg.low_effort is False, f"{role_name}.low_effort should default to False"
+            assert role_cfg.enable_thinking is False, (
+                f"{role_name}.enable_thinking should default to False"
+            )
+            assert role_cfg.reasoning_budget == 0, (
+                f"{role_name}.reasoning_budget should default to 0"
+            )
+            assert role_cfg.low_effort is False, (
+                f"{role_name}.low_effort should default to False"
+            )
 
     def test_thinking_off_by_default_regardless_of_main_config(
         self, monkeypatch: pytest.MonkeyPatch

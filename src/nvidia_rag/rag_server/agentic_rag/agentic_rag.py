@@ -259,7 +259,16 @@ class AgenticRag:
         model_or_endpoint_overridden = (
             overrides.model is not None or overrides.llm_endpoint is not None
         )
-        cache_key = "__shared__" if model_or_endpoint_overridden else role_name
+        # When the query router supplies per-role thinking overrides, every role
+        # may resolve to a different enable_thinking, so they cannot share one
+        # client — force a per-role cache key even if model/endpoint is also
+        # overridden (each role still uses the overridden model/endpoint, just
+        # with its own thinking flag).
+        role_thinking_overridden = bool(overrides.enable_thinking_by_role)
+        if model_or_endpoint_overridden and not role_thinking_overridden:
+            cache_key = "__shared__"
+        else:
+            cache_key = role_name
 
         cache = overrides._built_llms
         if cache_key in cache:
@@ -356,10 +365,17 @@ class AgenticRag:
         temperature = _resolve_gen("temperature", overrides.temperature)
         top_p = _resolve_gen("top_p", overrides.top_p)
         max_tokens = _resolve_gen("max_tokens", overrides.max_tokens)
-        # Thinking params are never overridden by the per-request API; always
-        # resolved from the per-role agentic config so that AGENTIC_*_LLM_ENABLE_THINKING
-        # is respected even when temperature/top_p/max_tokens cause this override path.
-        enable_thinking = _resolve_gen("enable_thinking", None)
+        # enable_thinking may be overridden per-role by the query router; when
+        # the router didn't decide for this role (or routing is off) the value
+        # is None and we fall back to the per-role AGENTIC_*_LLM_ENABLE_THINKING
+        # config. reasoning_budget / low_effort are never overridden per-request
+        # and always resolve from config.
+        role_thinking_override = (
+            overrides.enable_thinking_by_role.get(role_name)
+            if overrides.enable_thinking_by_role
+            else None
+        )
+        enable_thinking = _resolve_gen("enable_thinking", role_thinking_override)
         reasoning_budget = _resolve_gen("reasoning_budget", None)
         low_effort = _resolve_gen("low_effort", None)
 

@@ -2372,6 +2372,12 @@ class NvidiaRAG:
         ContextVar so the cached agent can serve concurrent requests safely.
         """
         from nvidia_rag.rag_server.agentic_rag.builder import AgenticSearchParams
+        from nvidia_rag.rag_server.agentic_rag.query_router import (
+            RoutingDecision,
+            build_thinking_overrides,
+            classify_query,
+            parse_routed_roles,
+        )
         from nvidia_rag.rag_server.agentic_rag.runner import run_agentic_pipeline
 
         cfg = self.config.agentic_rag
@@ -2514,6 +2520,29 @@ class NvidiaRAG:
                 runtime_max_tokens_override,
             )
 
+        # Per-query reasoning routing: classify this query and, when routing is
+        # enabled, override the per-role ENABLE_THINKING for this request only.
+        # Default-off behind AGENTIC_QUERY_ROUTING_ENABLED so existing behaviour
+        # is unchanged unless explicitly opted in. Safety bias: uncertain queries
+        # classify as "complex" (thinking-ON). The override is request-scoped and
+        # never mutates global config or affects concurrent requests.
+        runtime_enable_thinking_overrides: dict[str, bool] | None = None
+        routing_decision: RoutingDecision | None = None
+        if cfg.query_routing.enabled:
+            decision = classify_query(retriever_query)
+            routing_decision = decision
+            routed_roles = parse_routed_roles(cfg.query_routing.routed_roles)
+            runtime_enable_thinking_overrides = build_thinking_overrides(
+                decision, routed_roles
+            )
+            logger.info(
+                "  - query routing: label=%s thinking=%s roles=%s (%s)",
+                decision.label,
+                decision.thinking,
+                routed_roles,
+                decision.reason,
+            )
+
         return await run_agentic_pipeline(
             agent=agent,
             graph=graph,
@@ -2533,6 +2562,8 @@ class NvidiaRAG:
             runtime_temperature_override=runtime_temperature_override,
             runtime_top_p_override=runtime_top_p_override,
             runtime_max_tokens_override=runtime_max_tokens_override,
+            runtime_enable_thinking_overrides=runtime_enable_thinking_overrides,
+            routing_decision=routing_decision,
         )
 
     async def _rag_chain(

@@ -292,6 +292,12 @@ envVars:
   AGENTIC_SYNTHESIS_LLM_REASONING_BUDGET: "0"
   AGENTIC_SYNTHESIS_LLM_LOW_EFFORT: "false"
 
+  # Per-query reasoning routing (off by default). When enabled, a lightweight
+  # classifier labels each query simple/complex and overrides the per-role
+  # ENABLE_THINKING for that request only (uncertain -> thinking-ON for safety).
+  AGENTIC_QUERY_ROUTING_ENABLED: "false"
+  AGENTIC_QUERY_ROUTING_ROLES: "planner,task,seed_gen,synthesis"
+
   NEMO_GUARDRAILS_URL: "nemo-guardrails:7331"
 
   # enable iterative query decomposition

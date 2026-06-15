@@ -448,4 +448,46 @@ describe('useChatStream — agentic streaming path (PR #512)', () => {
     ]);
     expect(last.reasoning_steps?.[0].status).toBe('done');
   });
+
+  it('renders the query_routing stage (start+end) as one completed step', async () => {
+    // Backend emits a query_routing stage_start/stage_end pair as the first
+    // two chunks when per-query reasoning routing is enabled. No frontend
+    // code changes are needed — it flows through the generic stage handling.
+    const { last } = await drain([
+      {
+        choices: [
+          {
+            delta: {
+              event_type: 'stage_start',
+              stage: 'query_routing',
+              reasoning_content:
+                'Analyzing the question to choose a reasoning strategy…',
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              event_type: 'stage_end',
+              stage: 'query_routing',
+              reasoning_content:
+                'Classified as a multi-step question — enabling step-by-step reasoning.',
+            },
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    const step = last.reasoning_steps?.[0];
+    expect(step?.stage).toBe('query_routing');
+    expect(step?.status).toBe('done');
+    expect(step?.label).toBe(
+      'Analyzing the question to choose a reasoning strategy…'
+    );
+    expect(step?.summary).toBe(
+      'Classified as a multi-step question — enabling step-by-step reasoning.'
+    );
+  });
 });

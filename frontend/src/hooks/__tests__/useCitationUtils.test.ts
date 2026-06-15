@@ -34,6 +34,7 @@ describe('useCitationUtils', () => {
       const { result } = renderHook(() => useCitationUtils());
       expect(result.current.formatStage('initial_retrieval')).toBe('Initial retrieval');
       expect(result.current.formatStage('verify_execute')).toBe('Verify execute');
+      expect(result.current.formatStage('query_routing')).toBe('Query routing');
     });
 
     it('humanises kebab-case stage identifiers', () => {

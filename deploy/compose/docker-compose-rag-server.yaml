@@ -97,6 +97,12 @@ services:
       AGENTIC_SYNTHESIS_LLM_REASONING_BUDGET: ${AGENTIC_SYNTHESIS_LLM_REASONING_BUDGET:-0}
       AGENTIC_SYNTHESIS_LLM_LOW_EFFORT: ${AGENTIC_SYNTHESIS_LLM_LOW_EFFORT:-false}
 
+      # Per-query reasoning routing (off by default). When enabled, a lightweight
+      # classifier labels each query simple/complex and overrides the per-role
+      # ENABLE_THINKING for that request only (uncertain -> thinking-ON for safety).
+      AGENTIC_QUERY_ROUTING_ENABLED: ${AGENTIC_QUERY_ROUTING_ENABLED:-false}
+      AGENTIC_QUERY_ROUTING_ROLES: ${AGENTIC_QUERY_ROUTING_ROLES:-planner,task,seed_gen,synthesis}
+
       ##===Query Rewriter Model specific configurations===
       APP_QUERYREWRITER_MODELNAME: ${APP_QUERYREWRITER_MODELNAME:-"nvidia/nemotron-3-super-120b-a12b"}
       # url on which query rewriter model is hosted. If "", Nvidia hosted API is used
@@ -261,9 +267,14 @@ services:
 
       # Verification pass (disabled by default)
       AGENTIC_VERIFICATION_ENABLED: ${AGENTIC_VERIFICATION_ENABLED:-false}
+      AGENTIC_VERIFICATION_MAX_TASKS: ${AGENTIC_VERIFICATION_MAX_TASKS:-3}
 
       # Context window budget for retrieved chunks
       AGENTIC_CONTEXT_MAX_TOKENS: ${AGENTIC_CONTEXT_MAX_TOKENS:-100000}
+
+      # Planner decomposition budget (surfaced for tuning; defaults match code)
+      AGENTIC_PLANNER_MAX_TASKS: ${AGENTIC_PLANNER_MAX_TASKS:-5}
+      AGENTIC_PLANNER_MAX_SCOPE_ROUNDS: ${AGENTIC_PLANNER_MAX_SCOPE_ROUNDS:-2}
 
     ports:
       - "8081:8081"

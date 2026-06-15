@@ -65,7 +65,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from nvidia_rag.rag_server.agentic_rag.tracing import get_current_trace
@@ -77,6 +77,9 @@ from nvidia_rag.rag_server.response_generator import (
     Metrics,
     Usage,
 )
+
+if TYPE_CHECKING:
+    from nvidia_rag.rag_server.agentic_rag.query_router import RoutingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +193,12 @@ PARALLEL_TASK_NODES: frozenset[str] = frozenset({"execute", "verify_execute"})
 
 
 USER_FACING_LABELS: dict[str, str] = {
+    # --- query_routing (per-query reasoning router; emitted before the graph) --
+    "query_routing.start": "Analyzing the question to choose a reasoning strategy…",
+    "query_routing.end.simple": "Classified as a direct lookup — using the fast path.",
+    "query_routing.end.complex": (
+        "Classified as a multi-step question — enabling step-by-step reasoning."
+    ),
     # --- initial_retrieval ----------------------------------------------------
     "initial_retrieval.start": "Searching the knowledge base for relevant information…",
     "initial_retrieval.end": "Found {chunks} relevant passage(s).",
@@ -471,6 +480,7 @@ async def translate_graph_stream(
     enable_debug_stream: bool = False,
     rag_start_time_sec: float | None = None,
     on_complete: Callable[[str], Awaitable[None]] | None = None,
+    routing_decision: RoutingDecision | None = None,
 ) -> AsyncIterator[str]:
     """Consume ``graph.astream(...)`` and yield SSE-formatted ``ChainResponse``
     strings ready to be streamed to the HTTP client.
@@ -495,9 +505,37 @@ async def translate_graph_stream(
         on_complete:          Optional async callable invoked after the
                               final-answer stream ends.  Receives the final
                               answer string for trace/metrics bookkeeping.
+        routing_decision:     Optional per-query reasoning-router decision.  When
+                              provided (routing enabled), a ``query_routing``
+                              stage_start/stage_end pair is emitted as the first
+                              two chunks — before any graph node — so the client
+                              sees why the query took the fast or full-reasoning
+                              path.  ``None`` (routing disabled) emits nothing.
     """
     resp_id = str(uuid4())
     request_start = time.time()
+
+    # Emit the per-query reasoning-router decision (if any) as the very first
+    # stage event, ahead of initial_retrieval, reusing this stream's resp_id so
+    # the client groups it with the rest of the response.  The non-graph
+    # ``query_routing`` stage renders as one completed step in the UI.
+    if routing_decision is not None:
+        yield _build_chunk(
+            resp_id=resp_id,
+            model=model,
+            event_type=EventType.STAGE_START.value,
+            stage="query_routing",
+            reasoning_content=_format_label("query_routing.start"),
+        )
+        yield _build_chunk(
+            resp_id=resp_id,
+            model=model,
+            event_type=EventType.STAGE_END.value,
+            stage="query_routing",
+            reasoning_content=_format_label(
+                f"query_routing.end.{routing_decision.label}"
+            ),
+        )
 
     # Per-stream state ---------------------------------------------------------
     first_final_token_seen = False
@@ -547,9 +585,7 @@ async def translate_graph_stream(
                         ):
                             yield sse
 
-                    label = _format_label(
-                        data.get("key", ""), data.get("params") or {}
-                    )
+                    label = _format_label(data.get("key", ""), data.get("params") or {})
                     if event == "stage_start":
                         wire_event_type = EventType.STAGE_START.value
                     elif event == "stage_end":

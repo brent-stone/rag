@@ -104,18 +104,24 @@ class AgenticLLMOverrides:
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
+    # Per-role enable_thinking override set by the query router (see
+    # query_router.build_thinking_overrides). Maps role name (planner / task /
+    # seed_gen / synthesis) → desired thinking bool for this request only.
+    # A role absent from the dict keeps its server-wide AGENTIC_*_LLM_ENABLE_THINKING
+    # default. None means "router inactive — no thinking override".
+    enable_thinking_by_role: dict[str, bool] | None = None
     # Per-request cache: maps cache key → built LLM client. Key is "__shared__"
     # when model/endpoint is overridden (all 4 roles collapse to one client);
     # otherwise it's the role name (planner / task / seed_gen / synthesis) so
     # each role gets its own client with that role's configured model/endpoint
     # but the request-provided generation params applied.
     # Mutable; not part of equality / hashing.
-    _built_llms: dict[str, Any] = field(
-        default_factory=dict, repr=False, compare=False
-    )
+    _built_llms: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def has_any_override(self) -> bool:
         """True if at least one non-None override is set."""
+        if self.enable_thinking_by_role:
+            return True
         return any(
             v is not None
             for v in (
@@ -319,9 +325,7 @@ def _make_role_llm(
     temperature = _resolve_role_generation_param(
         role_cfg, fallback_cfg, rag_config, "temperature"
     )
-    top_p = _resolve_role_generation_param(
-        role_cfg, fallback_cfg, rag_config, "top_p"
-    )
+    top_p = _resolve_role_generation_param(role_cfg, fallback_cfg, rag_config, "top_p")
     max_tokens = _resolve_role_generation_param(
         role_cfg, fallback_cfg, rag_config, "max_tokens"
     )

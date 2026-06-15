@@ -32,14 +32,13 @@ from __future__ import annotations
 
 from typing import Any, Union
 
-from pydantic import SecretStr, field_validator
 from pydantic import Field as PydanticField
+from pydantic import SecretStr, field_validator
 
 # _ConfigBase and Field are imported from configuration.py.
 # This works because configuration.py places its import of this module
 # after _ConfigBase and Field are already defined.
-from nvidia_rag.utils.configuration import _ConfigBase, Field
-
+from nvidia_rag.utils.configuration import Field, _ConfigBase
 
 # =============================================================================
 # AGENT BEHAVIOUR SUB-CONFIGS
@@ -119,6 +118,50 @@ class AgenticContextConfig(_ConfigBase):
         env="AGENTIC_CONTEXT_MAX_TOKENS",
         description="Token budget for chunk context in prompts.",
     )
+
+
+class AgenticQueryRoutingConfig(_ConfigBase):
+    """Per-query reasoning-routing sub-config for agentic RAG.
+
+    When enabled, a lightweight classifier labels each incoming question as
+    ``simple`` (fact lookup / summarise — fast, thinking-OFF) or ``complex``
+    (numeric computation / comparison / multi-hop — full reasoning, thinking-ON)
+    and overrides the per-role ``ENABLE_THINKING`` flag for that request only.
+    The override is request-scoped (a ContextVar) and never mutates global
+    config or affects concurrent requests.
+
+    Safety bias: when the classifier is uncertain it labels the query
+    ``complex`` (thinking-ON), since a hard question sent down the fast path
+    yields a wrong answer.
+
+    Off by default so existing behaviour is unchanged unless explicitly enabled.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        env="AGENTIC_QUERY_ROUTING_ENABLED",
+        description=(
+            "Enable per-query reasoning routing. When false (default) the "
+            "server-wide AGENTIC_*_LLM_ENABLE_THINKING flags are used unchanged."
+        ),
+    )
+    routed_roles: str = Field(
+        default="planner,task,seed_gen,synthesis",
+        env="AGENTIC_QUERY_ROUTING_ROLES",
+        description=(
+            "Comma-separated agentic roles whose thinking the router controls. "
+            "Valid roles: planner, task, seed_gen, synthesis. Roles omitted here "
+            "keep their server-wide AGENTIC_*_LLM_ENABLE_THINKING default. "
+            "Defaults to all four roles."
+        ),
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes")
+        return bool(v)
 
 
 # =============================================================================
@@ -618,6 +661,7 @@ class AgenticRAGConfig(_ConfigBase):
                         AGENTIC_VERIFICATION_*, AGENTIC_CONTEXT_*
         Behaviour     — AGENTIC_CONCURRENCY_LIMIT, AGENTIC_RECURSION_LIMIT,
                         AGENTIC_LOG_LEVEL
+        Query routing — AGENTIC_QUERY_ROUTING_ENABLED, AGENTIC_QUERY_ROUTING_ROLES
     """
 
     # --- Per-role LLM configs -----------------------------------------------
@@ -679,3 +723,7 @@ class AgenticRAGConfig(_ConfigBase):
         default_factory=AgenticVerificationConfig
     )
     context: AgenticContextConfig = PydanticField(default_factory=AgenticContextConfig)
+    query_routing: AgenticQueryRoutingConfig = PydanticField(
+        default_factory=AgenticQueryRoutingConfig,
+        description="Per-query reasoning routing (off by default).",
+    )
