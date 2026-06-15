@@ -148,7 +148,7 @@ class AgenticVLMConfig(_ConfigBase):
     """
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         env="AGENTIC_VLM_ENABLED",
         description=(
             "Enable VLM processing for image/chart chunks in execute and "
