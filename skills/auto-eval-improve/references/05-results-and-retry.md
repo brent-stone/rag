@@ -20,9 +20,12 @@ for f in rag_${DS}_evaluation_metrics.json rag_${DS}_evaluation_results.json \
          rag_${DS}_evaluation_data.json rag_${DS}_evaluation_summary.json; do
   [ -s "results/$DS/$f" ] && echo "OK  $f" || echo "MISSING/EMPTY  $f"
 done
-# token-cost report — present on a normal run (warn, don't fail, if absent, e.g. very old harness):
+# token-cost reports — present on a normal run (warn, don't fail, if absent, e.g. very old harness):
 [ -s "results/$DS/rag_${DS}_stream_tokens.json" ] && echo "OK  rag_${DS}_stream_tokens.json" \
-  || echo "WARN  rag_${DS}_stream_tokens.json missing (token cost unavailable this run)"
+  || echo "WARN  rag_${DS}_stream_tokens.json missing (per-stage token cost unavailable this run)"
+# wire token usage (prompt/completion/total from the final stream chunk's `usage`):
+[ -s "results/$DS/rag_${DS}_token_usage.json" ] && echo "OK  rag_${DS}_token_usage.json" \
+  || echo "WARN  rag_${DS}_token_usage.json missing (no query reported wire usage this run)"
 # failure.txt present ⇒ >50% of queries failed ⇒ treat the run as FAILED:
 [ -f "results/$DS/failure.txt" ] && { echo "FAILED:"; cat "results/$DS/failure.txt"; } || echo "no failure.txt"
 ```
@@ -45,6 +48,26 @@ python3 -c "import json; a=json.load(open('results/$DS/rag_${DS}_stream_tokens.j
 print('tokenizer:', a['tokenizer'], '| samples:', a['sample_count']); print('totals:', a['totals']); \
 [print(s, b['mean_reasoning_tokens'], 'reasoning /', b['mean_content_tokens'], 'content (mean/query)') for s,b in a['by_stage'].items()]"
 ```
+
+Wire token-usage peek (server-authoritative `prompt`/`completion`/`total` per query, summed across **every**
+LLM call in the request — plan/execute/verify/synthesize for agentic). This is the **true total cost**
+signal, and unlike `stream_tokens` it **includes input/prompt tokens** (retrieved chunks fed into each
+stage), which usually dominate the total:
+
+```bash
+python3 -c "import json; a=json.load(open('results/$DS/rag_${DS}_token_usage.json'))['aggregate']; \
+print('samples:', a['sample_count']); \
+print('mean/query  prompt:', a['mean_prompt_tokens'], '| completion:', a['mean_completion_tokens'], '| total:', a['mean_total_tokens'])"
+```
+
+The two reports are complementary, not redundant: `token_usage` (wire) gives the **total prompt+completion
+cost** including input — use it to compare overall cost across configs; `stream_tokens` (client-side
+tiktoken estimate of *streamed output text only*) is the only one that **attributes output to a stage and
+splits reasoning vs content** — use it to see *where* thinking is spent. The wire `completion` total should
+roughly match `stream_tokens` content+reasoning (within tiktoken-vs-server estimate noise); the rest of the
+wire total is input tokens that `stream_tokens` never sees. **Caveat:** `token_usage.sample_count` may be
+below the query count — queries that errored or returned no `usage` are skipped (same as `stream_tokens`),
+so compare the two reports on their shared sample count.
 
 A run can be valid on accuracy yet flag a latency problem: if `latency.sample_count` is far below the query
 count, or `max_total_seconds` ≈ the `--timeout` (e.g. 300 s) for many queries, requests were timing out —
@@ -81,11 +104,12 @@ cd "$SCRIPTS_DIR"
 DS=financebench
 # $SNAP was set in Stage 4.4: SNAP="$EXP_DIR/$DS/${CYCLE}_${TS}" (e.g. baseline_20260609_103000)
 cp results/$DS/rag_${DS}_evaluation_*.json "$SNAP"/
-# the token-cost report is NOT matched by the _evaluation_* glob above — copy it explicitly:
+# the token-cost reports are NOT matched by the _evaluation_* glob above — copy them explicitly:
 cp results/$DS/rag_${DS}_stream_tokens.json "$SNAP"/ 2>/dev/null || echo "no stream_tokens.json to copy"
+cp results/$DS/rag_${DS}_token_usage.json "$SNAP"/ 2>/dev/null || echo "no token_usage.json to copy"
 [ -f "results/$DS/failure.txt" ] && cp "results/$DS/failure.txt" "$SNAP"/
 echo "Snapshot: $SNAP"
-ls -lrt "$SNAP"        # expect the 4 eval JSONs + stream_tokens.json + eval.log (+ failure.txt only on a failed run)
+ls -lrt "$SNAP"        # expect the 4 eval JSONs + stream_tokens.json + token_usage.json + eval.log (+ failure.txt only on a failed run)
 ```
 
 This yields `$EXP_DIR/<dataset>/<cycle>_<timestamp>/` per run (`baseline_<ts>`, `cycle1_<ts>`, …), each

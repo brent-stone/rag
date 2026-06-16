@@ -831,6 +831,18 @@ class RetrieverConfig(_ConfigBase):
         env="VECTOR_DB_TOPK",
         description="Number of documents to retrieve from vector database before reranking",
     )
+    agentic_task_top_k: int | None = Field(
+        default=None,
+        env="APP_AGENTIC_TASK_RETRIEVER_TOPK",
+        description="Agentic RAG: top documents after reranking for the task-execute "
+        "stage (execute / execute_scope / verify_execute). Falls back to top_k when unset.",
+    )
+    agentic_task_vdb_top_k: int | None = Field(
+        default=None,
+        env="APP_AGENTIC_TASK_VECTOR_DB_TOPK",
+        description="Agentic RAG: documents retrieved from the vector database before "
+        "reranking for the task-execute stage. Falls back to vdb_top_k when unset.",
+    )
     score_threshold: float = Field(
         default=0.25,
         env="APP_RETRIEVER_SCORETHRESHOLD",
@@ -909,6 +921,37 @@ class RetrieverConfig(_ConfigBase):
                 f"reranker_top_k ({self.top_k}) must be less than or equal to vdb_top_k ({self.vdb_top_k}). "
                 "Please check your settings and try again."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_agentic_task_top_k(self) -> "RetrieverConfig":
+        if self.agentic_task_vdb_top_k is not None:
+            v = self.agentic_task_vdb_top_k
+            if v <= 0:
+                raise ValueError(
+                    f"agentic_task_vdb_top_k must be greater than 0, got {v}. "
+                    "Please provide a positive integer for the number of documents to "
+                    "retrieve from the vector database during the agentic task-execute stage."
+                )
+            if v > 400:
+                logger.warning(
+                    "APP_AGENTIC_TASK_VECTOR_DB_TOPK=%s is outside the request limit of "
+                    "1..400. The server will start so the value can be corrected, but "
+                    "agentic task-execute retrievals using this value will be rejected.",
+                    v,
+                )
+        if self.agentic_task_top_k is not None:
+            effective_vdb_top_k = (
+                self.agentic_task_vdb_top_k
+                if self.agentic_task_vdb_top_k is not None
+                else self.vdb_top_k
+            )
+            if self.agentic_task_top_k > effective_vdb_top_k:
+                raise ValueError(
+                    f"agentic_task_top_k ({self.agentic_task_top_k}) must be less than or "
+                    f"equal to agentic_task_vdb_top_k/vdb_top_k ({effective_vdb_top_k}). "
+                    "Please check your settings and try again."
+                )
         return self
 
     @model_validator(mode="after")

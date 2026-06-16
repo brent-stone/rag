@@ -155,6 +155,9 @@ class AgenticSearchParams:
     vdb_top_k: int | None = None
     vdb_endpoint: str | None = None
     vdb_auth_token: str = ""
+    # Task-execute-stage overrides (None → fall back to vdb_top_k/reranker_top_k).
+    agentic_task_vdb_top_k: int | None = None
+    agentic_task_reranker_top_k: int | None = None
 
     # --- Reranking ----------------------------------------------------------
     reranker_top_k: int | None = None
@@ -197,6 +200,11 @@ _agentic_all_citations: contextvars.ContextVar[OrderedDict[str, list[SourceResul
 # RETRIEVER BRIDGE
 # =============================================================================
 
+# Agentic stages that perform per-sub-task retrieval. Retrievals tagged with one
+# of these stages honour the agentic_task_* top-k overrides; all other stages
+# (e.g. "initial_retrieval", "rag") use the base vdb_top_k/reranker_top_k.
+_TASK_EXECUTE_STAGES = {"execute", "execute_scope", "verify_execute"}
+
 
 def make_retriever_fn(
     nvidia_rag: NvidiaRAG,
@@ -228,14 +236,29 @@ def make_retriever_fn(
         # Passing the fallback here (not as ContextVar default) ensures each
         # fallback access gets a fresh AgenticSearchParams rather than a shared one.
         p = _agentic_search_params.get(AgenticSearchParams())
+        # Task-execute stages may override retrieval breadth; otherwise fall back
+        # to the per-request base values (which carry the standard config defaults).
+        is_task_execute = stage in _TASK_EXECUTE_STAGES
+        effective_vdb_top_k = (
+            p.agentic_task_vdb_top_k
+            if is_task_execute and p.agentic_task_vdb_top_k is not None
+            else p.vdb_top_k
+        )
+        effective_reranker_top_k = (
+            p.agentic_task_reranker_top_k
+            if is_task_execute and p.agentic_task_reranker_top_k is not None
+            else (
+                p.reranker_top_k
+                if p.reranker_top_k is not None
+                else default_reranker_top_k
+            )
+        )
         try:
             citations = await nvidia_rag.search(
                 query=query,
                 collection_names=p.collection_names,
-                reranker_top_k=p.reranker_top_k
-                if p.reranker_top_k is not None
-                else default_reranker_top_k,
-                vdb_top_k=p.vdb_top_k,
+                reranker_top_k=effective_reranker_top_k,
+                vdb_top_k=effective_vdb_top_k,
                 vdb_endpoint=p.vdb_endpoint,
                 vdb_auth_token=p.vdb_auth_token,
                 enable_reranker=p.enable_reranker,

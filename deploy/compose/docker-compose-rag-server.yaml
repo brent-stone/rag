@@ -11,7 +11,7 @@ services:
       args:
         DOWNLOAD_LEGAL_COMPLIANCE: ${DOWNLOAD_LEGAL_COMPLIANCE:-false}
     # start the server on port 8081 with 8 workers for improved latency on concurrent requests.
-    command: --port 8081 --host 0.0.0.0 --workers 8
+    command: --port 8081 --host 0.0.0.0 --workers 16
     volumes:
       # Mount the prompt.yaml file to the container, path should be absolute
       - ${PROMPT_CONFIG_FILE}:${PROMPT_CONFIG_FILE}
@@ -173,6 +173,11 @@ services:
 
       # Number of document chunks to insert in LLM prompt, used only when ENABLE_RERANKER is set to True
       APP_RETRIEVER_TOPK: ${APP_RETRIEVER_TOPK:-10}
+      # Agentic RAG task-execute stage retrieval. Key-only form: passed through from the host
+      # environment when set, omitted entirely when unset so the app falls back to
+      # VECTOR_DB_TOPK / APP_RETRIEVER_TOPK (empty string would fail int parsing).
+      APP_AGENTIC_TASK_VECTOR_DB_TOPK: ${APP_AGENTIC_TASK_VECTOR_DB_TOPK:-${VECTOR_DB_TOPK:-100}}
+      APP_AGENTIC_TASK_RETRIEVER_TOPK: ${APP_AGENTIC_TASK_RETRIEVER_TOPK:-${APP_RETRIEVER_TOPK:-10}}
 
       # Log level for server, supported level NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
       LOGLEVEL: ${LOGLEVEL:-INFO}
@@ -197,7 +202,7 @@ services:
       CONVERSATION_HISTORY: ${CONVERSATION_HISTORY:-0}
 
       # Tracing
-      APP_TRACING_ENABLED: ${APP_TRACING_ENABLED:-"False"}
+      APP_TRACING_ENABLED: ${APP_TRACING_ENABLED:-"True"}
       # HTTP endpoint
       APP_TRACING_OTLPHTTPENDPOINT: http://otel-collector:4318/v1/traces
       # GRPC endpoint

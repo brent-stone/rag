@@ -40,6 +40,8 @@ User wants to enable hybrid search, query multiple collections, add custom metad
 | `APP_VECTORSTORE_EF` | `100` | Search accuracy/speed trade-off (must be >= `VECTOR_DB_TOPK`) |
 | `VECTOR_DB_TOPK` | `100` | Candidates from vector DB (input to reranker) |
 | `APP_RETRIEVER_TOPK` | `10` | Chunks sent to LLM prompt (after reranking) |
+| `APP_AGENTIC_TASK_VECTOR_DB_TOPK` | _(unset → `VECTOR_DB_TOPK`)_ | Agentic RAG only: VDB candidates for the task-execute stage (execute / execute_scope / verify_execute). Initial retrieval still uses `VECTOR_DB_TOPK`. |
+| `APP_AGENTIC_TASK_RETRIEVER_TOPK` | _(unset → `APP_RETRIEVER_TOPK`)_ | Agentic RAG only: post-rerank chunks for the task-execute stage. Initial retrieval still uses `APP_RETRIEVER_TOPK`. |
 | `ENABLE_RERANKER` | `True` | Toggle reranking model |
 | `RERANKER_SCORE_THRESHOLD` | `0.0` | Minimum reranker score (0.0–1.0) |
 | `COLLECTION_NAME` | `multimodal_data` | Default collection name |

@@ -230,6 +230,8 @@ class TestRetrieverConfig:
 
         assert config.top_k == 10
         assert config.vdb_top_k == 100
+        assert config.agentic_task_top_k is None
+        assert config.agentic_task_vdb_top_k is None
         assert config.score_threshold == 0.25
         assert config.nr_url == "http://retrieval-ms:8000"
         assert config.nr_pipeline == "ranked_hybrid"
@@ -556,6 +558,8 @@ class TestConfigurationIntegration:
             # Other configs
             "TEMP_DIR": "/custom/temp",
             "VECTOR_DB_TOPK": "50",
+            "APP_AGENTIC_TASK_VECTOR_DB_TOPK": "40",
+            "APP_AGENTIC_TASK_RETRIEVER_TOPK": "8",
         }
 
         with patch.dict(os.environ, env_vars):
@@ -575,6 +579,8 @@ class TestConfigurationIntegration:
             assert config.object_store.secret_key.get_secret_value() == "test_secret"
             assert config.temp_dir == "/custom/temp"
             assert config.retriever.vdb_top_k == 50
+            assert config.retriever.agentic_task_vdb_top_k == 40
+            assert config.retriever.agentic_task_top_k == 8
 
     @patch.dict(os.environ, {}, clear=True)
     def test_quoted_boolean_environment_variables(self):
@@ -963,6 +969,37 @@ class TestRetrieverConfigValidation:
             "reranker_top_k (50) must be less than or equal to vdb_top_k (20)"
             in str(exc_info.value)
         )
+
+    def test_agentic_task_top_k_defaults_to_none(self):
+        """Agentic task-execute overrides default to None (fall back to base)."""
+        config = RetrieverConfig()
+        assert config.agentic_task_top_k is None
+        assert config.agentic_task_vdb_top_k is None
+
+    def test_agentic_task_top_k_exceeds_agentic_task_vdb_top_k(self):
+        """agentic_task_top_k > agentic_task_vdb_top_k raises ValueError."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrieverConfig(agentic_task_top_k=30, agentic_task_vdb_top_k=20)
+
+        assert "agentic_task_top_k (30) must be less than or equal to" in str(
+            exc_info.value
+        )
+
+    def test_agentic_task_top_k_exceeds_base_vdb_top_k(self):
+        """agentic_task_top_k > vdb_top_k (when its own vdb override is unset)."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrieverConfig(agentic_task_top_k=200, vdb_top_k=100)
+
+        assert "agentic_task_top_k (200) must be less than or equal to" in str(
+            exc_info.value
+        )
+
+    def test_agentic_task_vdb_top_k_zero_raises_error(self):
+        """agentic_task_vdb_top_k <= 0 raises ValueError."""
+        with pytest.raises(ValidationError) as exc_info:
+            RetrieverConfig(agentic_task_vdb_top_k=0)
+
+        assert "agentic_task_vdb_top_k must be greater than 0" in str(exc_info.value)
 
     def test_fetch_neighboring_pages_requires_fetch_full_page_context(self):
         """Test that fetch_neighboring_pages > 0 requires fetch_full_page_context."""

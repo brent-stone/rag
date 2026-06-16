@@ -2465,6 +2465,8 @@ class NvidiaRAG:
             vdb_top_k=vdb_top_k,
             vdb_endpoint=vdb_endpoint,
             vdb_auth_token=vdb_auth_token,
+            agentic_task_vdb_top_k=self.config.retriever.agentic_task_vdb_top_k,
+            agentic_task_reranker_top_k=self.config.retriever.agentic_task_top_k,
             reranker_top_k=reranker_top_k,
             reranker_model=reranker_model,
             reranker_endpoint=reranker_endpoint,

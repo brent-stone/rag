@@ -778,6 +778,21 @@ async def translate_graph_stream(
                 finish_reason="stop",
             )
         )
+        # Attach aggregate token usage for the whole agentic run, drawn from the
+        # active QueryTrace (totals across every LLM call: plan, execute,
+        # verify, synthesize). Mirrors how the standard pipeline populates
+        # ChainResponse.usage in response_generator.generate_answer_async.
+        trace = get_current_trace()
+        if trace is not None:
+            prompt_tokens = trace.total_input_tokens
+            completion_tokens = trace.total_output_tokens
+            total_tokens = prompt_tokens + completion_tokens
+            if total_tokens > 0:
+                finish_response.usage = Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                )
         yield "data: " + finish_response.model_dump_json() + "\n\n"
 
         if on_complete is not None:

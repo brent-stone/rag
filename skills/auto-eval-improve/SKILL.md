@@ -1,6 +1,6 @@
 ---
 name: auto-eval-improve
-version: "0.1.0"
+version: "0.2.0"
 description: >-
   Automated accuracy + per-query latency eval + improvement loop for Agentic/Standard RAG
   (blueprint-pipeline harness). Tracks RAGAS quality and end-to-end/TTFT latency; not load/throughput
@@ -44,8 +44,10 @@ but transparently supports **Standard RAG** — the only difference is whether t
 
 It optimizes for **two axes**: answer/retrieval **quality** (RAGAS) **and per-query latency**
 (end-to-end + time-to-first-token), both emitted by the eval harness. It also tracks a third **cost**
-signal — **token usage** — including a per-stage **content-vs-reasoning** token breakdown for agentic runs
-(written to `rag_<dataset>_stream_tokens.json`; see outputs). Treat them together — a change that holds
+signal — **token usage** — via two complementary reports: server-authoritative **wire usage**
+(`prompt`/`completion`/`total`, summed across every LLM call, **including input tokens**) in
+`rag_<dataset>_token_usage.json`, and a per-stage **content-vs-reasoning** breakdown of streamed output in
+`rag_<dataset>_stream_tokens.json` (see outputs). Treat them together — a change that holds
 accuracy but cuts latency or tokens is a win, and a change that buys accuracy must be weighed against its
 latency and token cost (see reference 06, §6.2/§6.4). The per-stage **reasoning-token** count is the clearest
 cost signal for reasoning-on/off and per-role config experiments — it shows exactly where the model spends
@@ -115,15 +117,26 @@ If the user says *"deploy / env / datasets are already done, start from ingestio
 - **Latency is measured under the eval's own light load on a shared LLM endpoint**, so absolute wall-clock
   drifts run-to-run (especially against cloud endpoints). Prefer **p50** over mean, and compare configs
   **within the same session/back-to-back**; treat small cross-day deltas as noise.
-- **Token cost.** The wire `token_usage` in the metrics JSON is often `0` for agentic runs (the server does
-  not report it per request). For agentic token cost, use the separate `rag_<dataset>_stream_tokens.json`
-  report instead — it counts the streamed text **client-side** (tiktoken `cl100k_base`, `len(text)//4`
-  fallback), split per agentic stage into content / reasoning / label tokens. These are **estimates** for
-  relative config comparison, not exact billing counts, and will not match the wire `usage`.
+- **Token cost.** Two reports, complementary. The **wire** `token_usage` (`rag_<dataset>_token_usage.json`,
+  also surfaced in the metrics JSON's `token_usage` block) is server-authoritative `prompt`/`completion`/`total`
+  summed across every LLM call — for agentic runs the rag-server now aggregates the whole request's QueryTrace
+  onto the final stream chunk, so it is populated (it was `0` on older server builds that didn't emit it).
+  This is the **total cost incl. input tokens**, which usually dominate. For *where* tokens are spent, the
+  separate `rag_<dataset>_stream_tokens.json` counts the streamed **output** text **client-side** (tiktoken
+  `cl100k_base`, `len(text)//4` fallback), split per agentic stage into content / reasoning / label tokens —
+  those are **estimates** for relative comparison, won't exactly match the wire `completion`, and exclude
+  input tokens.
 - **Long-running.** Each eval takes ~1–5 h and must run in the **background**; do not poll on a timer
   (the harness re-invokes you on exit).
-- **Sequential only.** Never run two evals concurrently against the same server — they share
-  rag-server/ingestor, so concurrent load skews metrics and causes timeouts (Instructions rule 2 / ref 04).
+- **Parallel datasets across one server — gated on worker count.** Different **datasets** may be evaluated
+  **concurrently against a single rag-server** (one independent background process per dataset), **only when
+  that rag-server is started with ≥16 workers** (`--workers` in `docker-compose-rag-server.yaml`). Default
+  fan-out is **4 datasets at once**; the user may override the limit (the skill then **warns** and uses the
+  requested value). Below 16 workers — or if the worker count can't be confirmed — fall back to
+  **sequential**. Never run two evals of the **same** dataset concurrently (same collection), and divide
+  `--thread` across the parallel processes so total in-flight load stays near the worker count. Ingestion
+  still flows through the single-worker ingestor, so concurrent ingestion contends — pre-ingest or stagger
+  it (Instructions rule 2 / ref 04 §4.4, §4.6).
 - **Improve loop capped at 3 cycles** per dataset, and stops earlier on a regression or plateau of the
   primary metric (ref 06 §6.7).
 - **Source-code changes are excluded from the auto-loop.** The loop applies only env/config and eval-CLI
@@ -164,9 +177,17 @@ task tools for a long run. Key cross-cutting rules:
    server default, so it must be present for an agentic run regardless of the env var; set both for an
    unambiguous run. Confirm with the user which mode they want (default: **agentic**).
 2. **Run the eval in the background** (`run_in_background: true`). It is long-running (~1–5 h). Do **not**
-   poll on a timer — the harness re-invokes you when the process exits. **With multiple datasets, run them
-   one at a time (sequentially) — never launch two evals concurrently against the same server** (they share
-   rag-server/ingestor; concurrent load skews metrics and causes timeouts). See reference 04.
+   poll on a timer — the harness re-invokes you when the process exits. **Multiple datasets may run in
+   parallel against one rag-server, one independent background process per dataset, when the server has
+   ≥16 workers** (verify the `--workers` value before fanning out — ref 04 §4.4). **Default fan-out is 4
+   concurrent datasets.** If the user specifies a different limit in their prompt, honor it and **emit a
+   warning** stating the chosen value and the risk (e.g. *"Running 6 datasets in parallel as requested —
+   above the recommended 4; expect higher per-request latency and possible timeouts on a 16-worker
+   server."*). If the server has fewer than 16 workers, or the count cannot be confirmed, fall back to
+   **sequential** runs. Never run two evals of the **same** dataset at once, and split `--thread` across the
+   parallel processes so combined in-flight requests stay near the worker count. After **all** parallel
+   processes exit, run the **cross-dataset query-success check** (ref 04 §4.6) before analysis. See
+   reference 04.
 3. **Always derive the command from the live argparse**, not from any example. The script flag is
    `--datasets` (plural, space-separated list) and `--agentic` is a bare flag. Verify with
    `python3 evaluate_rag.py --help` before constructing the command.
@@ -205,13 +226,14 @@ scripts/
     └── <dataset>/                             # financebench/, kg_rag/, …
         └── <cycle>_<TS>/                      # baseline_<ts>, cycle1_<ts>, … — one per run
             ├── rag_<dataset>_evaluation_*.json (4 files, see below)
-            ├── rag_<dataset>_stream_tokens.json # per-stage token-cost breakdown (5th file, see below)
+            ├── rag_<dataset>_stream_tokens.json # per-stage streamed-output token breakdown (5th file)
+            ├── rag_<dataset>_token_usage.json   # wire prompt/completion/total per query (6th file)
             ├── failure.txt                    # only when >50% of queries failed — treat as a failed run
             ├── eval.log                       # this run's tee'd log (was eval_<dataset>_*.log at root)
             └── REPRODUCE.md                   # self-contained rerun steps (Stage 5.4)
 ```
 
-The script writes **5 JSONs** into each `<dataset>/` (scratch → copied into the snapshot):
+The script writes **6 JSONs** into each `<dataset>/` (scratch → copied into the snapshot):
 
 | File | Contents |
 |------|----------|
@@ -219,20 +241,27 @@ The script writes **5 JSONs** into each `<dataset>/` (scratch → copied into th
 | `rag_<dataset>_evaluation_results.json` | Per-metric lists incl. `recall_metrics` (page/document level), `citations`, `token_usage`, **`latency`** (same aggregate) + **`latency_per_sample`** (per-query list) |
 | `rag_<dataset>_evaluation_data.json` | Per-query rows: `question`, `answer`, `generated_answer`, `generated_contexts`, `retrieved_docs`, `usage`, **`latency`** (`{total_seconds, ttft_seconds}` for that query) |
 | `rag_<dataset>_evaluation_summary.json` | Headline means |
-| `rag_<dataset>_stream_tokens.json` | **Token-cost report** (agentic & standard). `aggregate.by_stage` + `aggregate.totals`, each with `sum_`/`mean_` of `content_tokens` (answer text), `reasoning_tokens` (model thinking), `label_tokens` (UX labels, *not* model output), and `total_tokens` (= content + reasoning); plus a `per_sample` per-query list and a `tokenizer` field. Stages: `initial_retrieval`, `plan`, `execute`, `synthesize`, `verify`, `verify_execute`, `non_agentic`. Client-side tiktoken estimate — see note below. |
+| `rag_<dataset>_stream_tokens.json` | **Per-stage streamed-output token report** (agentic & standard). `aggregate.by_stage` + `aggregate.totals`, each with `sum_`/`mean_` of `content_tokens` (answer text), `reasoning_tokens` (model thinking), `label_tokens` (UX labels, *not* model output), and `total_tokens` (= content + reasoning); plus a `per_sample` per-query list and a `tokenizer` field. Stages: `initial_retrieval`, `plan`, `execute`, `synthesize`, `verify`, `verify_execute`, `non_agentic`. Client-side tiktoken estimate, **output only** — see note below. |
+| `rag_<dataset>_token_usage.json` | **Wire token-usage report** (server-authoritative). `aggregate` with `sample_count` + `sum_`/`mean_` of `prompt_tokens`, `completion_tokens`, `total_tokens`; plus a `per_sample` per-query list. Captured from the final stream chunk's `usage`; for agentic runs this is the **whole request's QueryTrace summed across every LLM call** (plan/execute/verify/synthesize) and **includes input/prompt tokens** (the dominant cost). Complements `stream_tokens` — see note below. |
 | `failure.txt` | Present only when >50% of queries failed — treat as a failed run |
 
 > **Latency is real per-query timing** the eval *client* records around each `/generate` call: `total_seconds`
 > = request start → last chunk (end-to-end); `ttft_seconds` = request start → first content token. The console
 > "EVALUATION RESULTS" block also prints these (mean / p50 / p90 / p99 / min / max total + mean/p90 TTFT).
 
-> **Token cost is in `rag_<dataset>_stream_tokens.json`** — a client-side tiktoken (`cl100k_base`, `len//4`
-> fallback) estimate of the streamed text, counted **per agentic stage** and split into `content_tokens`
-> (answer text), `reasoning_tokens` (model thinking), and `label_tokens` (short UX labels, not model output).
-> Unlike the wire `token_usage` (often `0` for agentic), this is always populated. On success the console
-> prints `Stream token breakdown (N samples) written to …`. Read `aggregate.totals.mean_reasoning_tokens` and
-> the per-stage `mean_reasoning_tokens` to see **where reasoning effort goes** — the key cost signal for any
-> reasoning-config A/B. These are estimates for relative comparison, not exact billing counts.
+> **Token cost = two complementary reports.** `rag_<dataset>_token_usage.json` (wire) is the
+> **total cost**: server-authoritative `prompt`/`completion`/`total` summed across every LLM call,
+> **including input tokens** (which usually dominate). For agentic runs the rag-server aggregates the whole
+> request's QueryTrace onto the final stream chunk, so it is populated (it was `0` on older server builds).
+> On success the console prints a `Token usage (N samples) written to …` line and a `Token Usage` block in
+> "EVALUATION RESULTS". `rag_<dataset>_stream_tokens.json` (per-stage) is a client-side tiktoken
+> (`cl100k_base`, `len//4` fallback) estimate of the streamed **output** text only, split into
+> `content_tokens` (answer), `reasoning_tokens` (thinking), `label_tokens` (UX labels, not model output) —
+> read `aggregate.totals.mean_reasoning_tokens` and the per-stage `mean_reasoning_tokens` to see **where
+> reasoning effort goes** (key signal for reasoning-config A/Bs). Use **wire** to compare total cost across
+> configs, **stream** to localize it. The wire `completion` ≈ stream content+reasoning (within estimate
+> noise); the rest of the wire total is input. Both skip queries that errored / reported no usage, so compare
+> them on their shared `sample_count`.
 
 > **Legacy artifacts:** earlier runs left flat artifacts at the scripts root (`results/<dataset>_*`
 > snapshots, `eval_*.log`, `AUTO_EVAL_STATE.md`, `AUTO_EVAL_REPORT.md`). The experiment-folder convention

@@ -40,15 +40,21 @@ Compare, per dataset:
   `total_seconds` is end-to-end (request → last token); `ttft_seconds` is time-to-first-token. Compare
   **`p50_total_seconds`** (robust to outliers) plus `mean_total_seconds`, `p90/p99_total_seconds` (tail), and
   `mean_ttft_seconds`/`p50_ttft_seconds`. Deeper reasoning, verification, and higher top_k all raise latency.
-- **Token cost** — a third signal alongside accuracy and latency. The wire `token_usage` (mean prompt/
-  completion tokens, in `..._evaluation_metrics.json`) is often `0` for agentic `/generate` runs, so for
-  agentic use the **`rag_<dataset>_stream_tokens.json`** report instead. Compare `aggregate.totals.
-  mean_total_tokens` (and `mean_reasoning_tokens` vs `mean_content_tokens`) run-to-run, and read
+- **Token cost** — a third signal alongside accuracy and latency, via two complementary reports.
+  For **total cost**, use the wire **`rag_<dataset>_token_usage.json`** (also surfaced in
+  `..._evaluation_metrics.json`'s `token_usage` block): server-authoritative `aggregate.mean_total_tokens`
+  with `mean_prompt_tokens` (input — usually the dominant term) and `mean_completion_tokens`, summed across
+  every LLM call. For agentic runs the rag-server aggregates the whole request's QueryTrace onto the final
+  chunk, so this is now populated (it read `0` on older server builds). Compare `mean_total_tokens` run-to-run
+  as the headline cost number. For **where** the cost lives, use **`rag_<dataset>_stream_tokens.json`**:
+  compare `aggregate.totals.mean_reasoning_tokens` vs `mean_content_tokens` and read
   `aggregate.by_stage[<stage>].mean_reasoning_tokens` to see **which stage** (`plan`, `execute`,
-  `synthesize`, …) the reasoning cost lives in. These are client-side tiktoken **estimates** of streamed
-  text (not exact billing), so treat them like latency — good for relative comparison within a session. They
-  are the clearest cost signal for reasoning-config A/Bs: e.g. turning a role's `ENABLE_THINKING` off should
-  drop that stage's `mean_reasoning_tokens` toward 0; if accuracy holds, that's the cost win quantified.
+  `synthesize`, …) the reasoning cost lives in. The stream report is a client-side tiktoken **estimate** of
+  streamed **output** text (not exact billing, excludes input), so treat it like latency — good for relative
+  comparison within a session. It is the clearest signal for reasoning-config A/Bs: turning a role's
+  `ENABLE_THINKING` off should drop that stage's `mean_reasoning_tokens` toward 0; if accuracy holds and the
+  wire `mean_total_tokens` drops, that's the cost win quantified. (Both reports skip queries that errored or
+  reported no usage — compare them on their shared `sample_count`.)
 
 Report each as **current vs previous (Δ)**, on **both axes — accuracy AND latency**. Flag any regression:
 e2e_accuracy down; recall down while latency/tokens up (agentic doing more work for worse answers); or
@@ -255,7 +261,8 @@ published or shared outside this session:
 
 Write it in the plain language described above. Produce a report containing:
 1. Per-dataset metric table: current vs previous (Δ), **including latency (p50 total + mean/p50 TTFT) and
-   token cost (mean total tokens, and mean reasoning tokens for agentic, from `rag_<dataset>_stream_tokens.json`)
+   token cost (wire `mean_total_tokens` from `rag_<dataset>_token_usage.json` for the headline cost, plus mean
+   reasoning tokens for agentic from `rag_<dataset>_stream_tokens.json`)
    alongside the accuracy metrics**, with regressions on *either* axis flagged. For reasoning-config A/Bs,
    show the per-stage reasoning-token change so the cost saving (or rise) is explicit.
 2. Top failing questions with failure classification and short evidence (note any "slow but correct" cases

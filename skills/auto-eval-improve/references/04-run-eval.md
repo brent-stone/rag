@@ -70,7 +70,8 @@ experiments/exp_<ts>_<mode>/
 └── <dataset>/                     # financebench/, kg_rag/, …
     ├── baseline_<TS>/             # baseline | cycle1 | cycle2 | cycle3
     │   ├── rag_<dataset>_evaluation_{metrics,results,data,summary}.json
-    │   ├── rag_<dataset>_stream_tokens.json   # per-stage token-cost breakdown (Stage 5.3 copies it too)
+    │   ├── rag_<dataset>_stream_tokens.json   # per-stage streamed-output token breakdown (Stage 5.3 copies it too)
+    │   ├── rag_<dataset>_token_usage.json     # wire prompt/completion/total per query (Stage 5.3 copies it too)
     │   ├── failure.txt            # only if >50% queries failed
     │   ├── eval.log               # this run's tee'd log
     │   └── REPRODUCE.md           # self-contained rerun steps (Stage 5.4)
@@ -84,10 +85,10 @@ experiments/exp_<ts>_<mode>/
 ## 4.1 Ask which datasets to run (QA)
 
 Use `AskUserQuestion` (multi-select) to let the user pick. Default selection if they have no preference:
-**`google_frames`, `financebench`, `kg_rag`, `hotpotqa`**. One command can take several datasets
-(`--datasets` is space-separated), but each runs sequentially and a big dataset can take hours — consider
-one process per dataset so a single failure doesn't block the rest, and so each can be timestamped
-independently (Stage 5). Confirm only datasets already downloaded in Stage 3.
+**`google_frames`, `financebench`, `kg_rag`, `hotpotqa`**. **Launch one independent background process per
+dataset** (not one command with a space-separated `--datasets` list): a single failure then doesn't block
+the rest, each is timestamped independently (Stage 5), and the per-dataset processes can run **in parallel**
+on one rag-server (§4.4). Confirm only datasets already downloaded in Stage 3.
 
 Also confirm the **mode**: agentic (default) or standard. This decides whether `--agentic` is on the
 command (and whether `ENABLE_AGENTIC_RAG=true` was set in Stage 1).
@@ -171,35 +172,91 @@ python3 evaluate_rag.py --port 8081 --host localhost --datasets kg_rag --top_k 1
 For **standard RAG**: drop `--agentic` (and ensure `ENABLE_AGENTIC_RAG` is not forcing agentic on the
 server). Everything else — including passing `--model` and `--llm_endpoint` — is identical.
 
-## 4.4 Launch in the background
+## 4.4 Launch in the background (parallel across datasets)
 
-This is a 1–5 hour process. Launch it with the Bash tool using **`run_in_background: true`** and capture a
-log. Then **stop** — do not sleep/poll on a timer. The harness re-invokes you when the process exits; only
-then proceed to Stage 5.
+This is a 1–5 hour process. Launch each dataset with the Bash tool using **`run_in_background: true`** and
+capture a log. Then **stop** — do not sleep/poll on a timer. The harness re-invokes you when a process
+exits; proceed to the cross-dataset success check (§4.6) and Stage 5 only after **all** launched processes
+have exited.
 
-Compute the cycle's snapshot folder **first** and `tee` the log straight into it, so the log lands next to
-the results it describes (no more `eval_<dataset>_*.log` scattered at the scripts root). `CYCLE` is
-`baseline` for the first run of a dataset, then `cycle1`/`cycle2`/`cycle3` for the Stage 6.7 improve cycles.
+**One independent background process per dataset**, and run them **in parallel on the single rag-server**
+when the server has enough workers. Each process writes its own snapshot folder and log, so failures and
+timestamps stay isolated.
+
+### Step 1 — Confirm the rag-server worker count (gate on ≥16)
+
+Parallel eval is safe only when rag-server runs with **≥16 workers**. The Compose default is `--workers 16`
+(`deploy/compose/docker-compose-rag-server.yaml`). Read the live value — do not assume:
+
+```bash
+# Live container (authoritative): inspect the actual start command
+docker inspect rag-server --format '{{join .Config.Cmd " "}}' 2>/dev/null   # look for: --workers <N>
+# Fallback: the compose definition
+grep -nE '\-\-workers' deploy/compose/docker-compose-rag-server.yaml
+```
+
+- **N ≥ 16** → parallel fan-out is allowed.
+- **N < 16, or undetermined** → run **sequentially** (one dataset at a time; wait for each to finish and
+  complete Stage 5 before the next). Optionally tell the user they can raise `--workers` to 16+ and redeploy
+  rag-server (via the `rag-blueprint` skill) to unlock parallel runs.
+
+### Step 2 — Decide the parallelism limit (default 4)
+
+- **Default: at most 4 datasets in parallel.** This balances throughput against per-request latency on a
+  16-worker server.
+- **User override:** if the user specifies a parallelism in their prompt (e.g. "run 6 in parallel",
+  "max 2 at a time"), **use that value** and **emit a warning** that states the chosen value and the trade-off.
+  Examples:
+  - Above 4: *"⚠️ Running 6 datasets in parallel as requested — above the recommended max of 4. On a
+    16-worker server this raises per-request latency and the chance of timeouts; latency metrics become less
+    comparable to sequential baselines."*
+  - Below the dataset count but ≥1: *"Running at most 2 datasets in parallel as requested; remaining datasets
+    queue and start as slots free up."*
+- The effective concurrency is `min(requested_or_default_limit, num_datasets)`. If more datasets than the
+  limit are selected, launch the first `limit` now and start each remaining dataset as a running one exits.
+
+### Step 3 — Split `--thread` so combined load ≈ worker count
+
+Each process issues up to `--thread` concurrent requests. Running `P` datasets in parallel multiplies that
+to `P × --thread`. Keep the **total** near the worker count so you don't oversubscribe:
+
+```
+per_process_thread ≈ max(4, floor(workers / P))     # e.g. 16 workers, P=4 → --thread 4
+```
+
+Use this per-process `--thread` for every parallel run. (Sequential runs keep the usual `--thread 16`.)
+
+### Step 4 — Launch one process per dataset
+
+Compute each cycle's snapshot folder **first** and `tee` the log straight into it, so the log lands next to
+the results it describes. `CYCLE` is `baseline` for the first run of a dataset, then `cycle1`/`cycle2`/`cycle3`
+for the Stage 6.7 improve cycles. Keep `--output_dir results` — each process passes a single `--datasets
+"$DS"`, so the script writes to its own `results/$DS/` subdir and **parallel runs never collide** (different
+datasets → different subdirs):
 
 ```bash
 cd "$SCRIPTS_DIR" && source .venv/bin/activate && export NVIDIA_API_KEY="$NVIDIA_API_KEY"
 DS=financebench; CYCLE=baseline
 TS=$(date +%Y%m%d_%H%M%S)
 SNAP="$EXP_DIR/$DS/${CYCLE}_${TS}"; mkdir -p "$SNAP"
-PYTHONUNBUFFERED=1 python3 evaluate_rag.py <flags from 4.3> --output_dir results 2>&1 | tee "$SNAP/eval.log"
+PYTHONUNBUFFERED=1 python3 evaluate_rag.py <flags from 4.3> \
+  --datasets "$DS" --thread <per_process_thread> --output_dir results 2>&1 | tee "$SNAP/eval.log"
 ```
 
-`--output_dir results` writes the script's transient scratch to `results/$DS/`; Stage 5.3 copies the JSONs
-into `$SNAP` alongside this log. Note the `$SNAP` path so Stage 5 can read the log if the run fails.
+Issue **one such `run_in_background: true` Bash call per dataset** (up to the parallelism limit). Note each
+`$SNAP/eval.log` path so Stage 5 can read the log and copy the JSONs from `results/$DS/`.
+
+> **Ingestion contends on a single-worker ingestor.** rag-server has 16 workers, but the **ingestor** runs
+> with `--workers 1` by default, so concurrent ingestion across datasets serializes and can time out. The
+> parallelism win is on the **generation/eval** phase, not ingestion. When fanning out, prefer to **pre-ingest**
+> (run each dataset once with `--skip_evaluation` to populate its collection, sequentially or lightly
+> staggered), then launch the parallel eval with `--skip_ingestion`. Each dataset uses a **distinct
+> collection**, so parallel runs never clobber each other's data.
 
 Guidance:
-- One background invocation per dataset (or per command) so failures and timestamps stay isolated.
-- **Run datasets SEQUENTIALLY, never two evals at once.** Do **not** launch a second dataset's eval while
-  another is still running — both hit the same rag-server/ingestor, so concurrent runs multiply the load
-  (`--thread` × N), skew metrics, and cause timeouts / transient errors that corrupt results. Wait for the
-  current run to finish (and complete Stage 5) before starting the next dataset. One eval process at a time.
+- Never run two evals of the **same** dataset at once — they share one collection and will corrupt it.
 - If you must set a fallback wakeup, make it long (≥1200 s) — the exit notification is the real signal.
-- Note the `$SNAP/eval.log` path for each run so Stage 5 can read errors if it fails.
+- Proceed to §4.6, then Stage 5, only after **every** launched process has exited.
 
 ## 4.5 What "done" looks like
 
@@ -207,5 +264,47 @@ On a successful exit you will see the `RAG Evaluation` banner, ingestion metrics
 (End-2-End Accuracy, context_relevance, response_groundedness, recall, token usage, and a **Latency (per
 query)** block — samples, mean/p50/p90/p99/min/max total seconds, mean/p90 TTFT), a
 `Stream token breakdown (N samples) written to …` line (the per-stage token-cost report), and
-`Evaluation complete. Results stored in directory: results`. Proceed to Stage 5 to verify the files on
-disk regardless of what the console said.
+`Evaluation complete. Results stored in directory: results`. Proceed to §4.6 (and then Stage 5) to verify
+the files on disk regardless of what the console said.
+
+## 4.6 After all runs exit — verify every query succeeded (across all datasets)
+
+When running datasets in parallel, the harness re-invokes you **once per process exit**. Do the per-run
+output validation in Stage 5 as usual, but **only after the last dataset's process has exited**, run this
+**cross-dataset query-success check** so a partial failure in any one dataset is caught before analysis.
+
+For each dataset, a query is "successful" when it produced a non-empty `generated_answer` and did not error.
+Compare the answered count to the dataset's expected query count and flag any dataset with failures:
+
+```bash
+cd "$SCRIPTS_DIR"
+echo "=== Cross-dataset query-success check ==="
+overall_ok=1
+for SNAP in "$EXP_DIR"/*/baseline_* "$EXP_DIR"/*/cycle*_*; do
+  [ -d "$SNAP" ] || continue
+  DS=$(basename "$(dirname "$SNAP")")
+  DATA=$(ls "$SNAP"/rag_*_evaluation_data.json 2>/dev/null | head -1)
+  if [ -z "$DATA" ]; then
+    echo "✗ $DS ($SNAP): no evaluation_data.json — run did not complete"; overall_ok=0; continue
+  fi
+  total=$(jq 'length' "$DATA")
+  # failed = empty/missing generated_answer
+  failed=$(jq '[.[] | select((.generated_answer // "") | gsub("\\s";"") == "")] | length' "$DATA")
+  ok=$((total - failed))
+  if [ -f "$SNAP/failure.txt" ] || [ "$failed" -gt 0 ]; then
+    echo "✗ $DS: $ok/$total queries OK, $failed failed${SNAP:+  ($SNAP)}"; overall_ok=0
+  else
+    echo "✓ $DS: $ok/$total queries OK"
+  fi
+done
+[ "$overall_ok" -eq 1 ] && echo "ALL DATASETS: every query succeeded." \
+                        || echo "ATTENTION: one or more datasets had failed queries — diagnose (Stage 5.2) before analysis."
+```
+
+- **All green** → proceed to Stage 5 (snapshot) and Stage 6 (analysis) for the full set.
+- **Any dataset with failures** (`failure.txt`, missing data file, or `failed > 0`) → treat **that dataset's
+  run** as failed: diagnose from its `eval.log` and retry it **once** per Stage 5.2 (the healthy datasets'
+  results stand and proceed normally). Report the per-dataset OK/failed counts to the user.
+
+Record the OK/failed counts per dataset in `state.md` alongside the metrics so the experiment manifest shows
+coverage at a glance.
