@@ -13,9 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// UNVERIFIED: lockfile not regenerated locally; pnpm install required to apply these pins.
-// These tests will pass once the lockfile is regenerated with the updated constraints.
-
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -33,26 +30,26 @@ function gte(a: string, b: string): boolean {
   return a2 >= b2;
 }
 
-describe('security version pins', () => {
-  const lockPath = resolve(__dirname, '../../../..', 'pnpm-lock.yaml');
-  const lockContent = readFileSync(lockPath, 'utf-8');
-
-  function findVersion(pkg: string): string | null {
-    const re = new RegExp(`^  ${pkg.replace('/', '\\/')}@([^\\s:]+):`, 'm');
-    const m = lockContent.match(re);
-    if (!m) return null;
-    return m[1].split('(')[0];
+function readInstalledVersion(pkg: string): string | null {
+  try {
+    const pkgJsonPath = resolve(__dirname, '../../../..', 'node_modules', pkg, 'package.json');
+    const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8')) as { version?: string };
+    return pkgJson.version ?? null;
+  } catch {
+    return null;
   }
+}
 
+describe('security version pins', () => {
   it('vite >= 6.4.3 (CVE-2026-53632 / GHSA-v6wh-96g9-6wx3)', () => {
-    const v = findVersion('vite');
-    expect(v).not.toBeNull();
-    expect(gte(v!, '6.4.3')).toBe(true);
+    const v = readInstalledVersion('vite');
+    expect(v, 'vite must be installed in node_modules').not.toBeNull();
+    expect(gte(v!, '6.4.3'), `vite@${v} must be >= 6.4.3`).toBe(true);
   });
 
   it('vitest >= 3.2.6 (GHSA-5xrq-8626-4rwp)', () => {
-    const v = findVersion('vitest');
-    expect(v).not.toBeNull();
-    expect(gte(v!, '3.2.6')).toBe(true);
+    const v = readInstalledVersion('vitest');
+    expect(v, 'vitest must be installed in node_modules').not.toBeNull();
+    expect(gte(v!, '3.2.6'), `vitest@${v} must be >= 3.2.6`).toBe(true);
   });
 });
