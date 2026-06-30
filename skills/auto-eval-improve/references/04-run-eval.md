@@ -119,6 +119,7 @@ Key flags (from `evaluate_rag.py`):
 | `--embedding_dimension` | Match the embedding model (default `2048`). |
 | `--force_ingestion` | Deletes + re-ingests the collection. **Destructive** — confirm with the user. |
 | `--skip_ingestion` / `--skip_evaluation` | Reuse an already-ingested collection / ingest only. |
+| `--skip_inference` / `--data_input_json` / `--judge_model` | **Re-evaluation only.** `--skip_inference` skips ingestion+inference and loads a pre-generated `rag_<dataset>_evaluation_data.json` given by `--data_input_json`, then runs only the RAGAS judge. `--judge_model` overrides the judge LLM (e.g. a second judge "B"); defaults to the script's `JUDGE_MODEL`. `--skip_inference` requires `--data_input_json` and **exactly one** `--datasets` value, and implies `--skip_ingestion`. Use a **distinct `--output_dir`** so re-eval results don't overwrite the original judge's results. |
 | `--chunk_size` / `--chunk_overlap` / `--batch_size` | Ingestion params; defaults usually fine. |
 
 > **Endpoint gotcha (important):** `--host/--port` and `--ingestor_server_url` are called *by the eval
@@ -171,6 +172,35 @@ python3 evaluate_rag.py --port 8081 --host localhost --datasets kg_rag --top_k 1
 
 For **standard RAG**: drop `--agentic` (and ensure `ENABLE_AGENTIC_RAG` is not forcing agentic on the
 server). Everything else — including passing `--model` and `--llm_endpoint` — is identical.
+
+## 4.3a Re-evaluate an existing run with a different judge model
+
+To re-score an already-generated `data.json` with a different judge — **without** re-running inference —
+pass `--skip_inference` + `--data_input_json` (and optionally `--judge_model`). This skips ingestion and
+generation entirely and runs only the RAGAS judge, so it is fast and needs only `NVIDIA_API_KEY`.
+
+```bash
+cd "$SCRIPTS_DIR"
+source .venv/bin/activate
+export NVIDIA_API_KEY="$NVIDIA_API_KEY"
+
+PYTHONUNBUFFERED=1 python3 evaluate_rag.py \
+  --datasets financebench \
+  --host localhost --port 8081 \
+  --rag_api_version 2 \
+  --skip_inference \
+  --data_input_json results/financebench/rag_financebench_evaluation_data.json \
+  --judge_model nvidia/openai/gpt-oss-120b \
+  --top_k 10 \
+  --output_dir results_judgeB
+```
+
+> **Notes:** `--skip_inference` requires exactly one `--datasets` value and an existing
+> `--data_input_json` file (it errors otherwise), and it implies `--skip_ingestion`. `--host`/`--port`
+> stay required by argparse but are **unused** on this path — any reachable/placeholder value is fine.
+> Point `--output_dir` at a **fresh directory** (e.g. `results_judgeB`) so the re-eval's
+> `rag_<dataset>_evaluation_results.json` / `_summary.json` / `_metrics.json` don't overwrite the
+> original judge's outputs. Omit `--judge_model` to re-run with the default judge.
 
 ## 4.4 Launch in the background (parallel across datasets)
 
