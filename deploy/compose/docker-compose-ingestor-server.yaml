@@ -33,10 +33,10 @@ services:
       ##===Vector DB specific configurations===
       # URL on which vectorstore is hosted
       # For custom operators, point to your service (e.g., http://your-custom-vdb:1234 or /volumes/lancedb/lancedb - for lancedb)
-      APP_VECTORSTORE_URL: ${APP_VECTORSTORE_URL:-http://elasticsearch:9200}
+      APP_VECTORSTORE_URL: ${APP_VECTORSTORE_URL:-/volumes/lancedb/lancedb}
       # Type of vectordb used to store embedding. Supported built-ins: "elasticsearch"[default], "milvus", "lancedb".
       # You can also provide your custom value (e.g., "your_custom_vdb") when you register it in `_get_vdb_op`.
-      APP_VECTORSTORE_NAME: ${APP_VECTORSTORE_NAME:-"elasticsearch"}
+      APP_VECTORSTORE_NAME: ${APP_VECTORSTORE_NAME:-"lancedb"}
       
       # Type of vectordb search to be used
       APP_VECTORSTORE_SEARCHTYPE: ${APP_VECTORSTORE_SEARCHTYPE:-"dense"} # Can be dense or hybrid
@@ -85,6 +85,9 @@ services:
       # APP_EMBEDDINGS_MODELNAME: ${APP_EMBEDDINGS_MODELNAME:-nvidia/llama-nemotron-embed-1b-v2}
       APP_EMBEDDINGS_DIMENSIONS: ${APP_EMBEDDINGS_DIMENSIONS:-2048}
 
+      # Ingestion backend: nv_ingest (NV-Ingest microservice) or nrl (NeMo-Retriever Library in-process)
+      INGESTOR_BACKEND: ${INGESTOR_BACKEND:-nrl}
+
       ##===NV-Ingest Connection Configurations=======
       APP_NVINGEST_MESSAGECLIENTHOSTNAME: ${APP_NVINGEST_MESSAGECLIENTHOSTNAME:-"nv-ingest-ms-runtime"}
       APP_NVINGEST_MESSAGECLIENTPORT: ${APP_NVINGEST_MESSAGECLIENTPORT:-7670}
@@ -95,6 +98,7 @@ services:
       APP_NVINGEST_EXTRACTTABLES: ${APP_NVINGEST_EXTRACTTABLES:-True}
       APP_NVINGEST_EXTRACTCHARTS: ${APP_NVINGEST_EXTRACTCHARTS:-True}
       APP_NVINGEST_EXTRACTIMAGES: ${APP_NVINGEST_EXTRACTIMAGES:-False}
+      APP_NVINGEST_STOREIMAGES: ${APP_NVINGEST_STOREIMAGES:-True}
       APP_NVINGEST_EXTRACTPAGEASIMAGE: ${APP_NVINGEST_EXTRACTPAGEASIMAGE:-False}
       APP_NVINGEST_STRUCTURED_ELEMENTS_MODALITY: ${APP_NVINGEST_STRUCTURED_ELEMENTS_MODALITY:-""} # Select from "image", "text_image"
       APP_NVINGEST_IMAGE_ELEMENTS_MODALITY: ${APP_NVINGEST_IMAGE_ELEMENTS_MODALITY:-""} # Select from "image"

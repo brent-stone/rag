@@ -244,9 +244,7 @@ class LanceDBVDB(VDBRagIngest):
         """
         lancedb_mod = _import_lancedb()
         import pyarrow as pa  # noqa: PLC0415
-        from nemo_retriever.vector_store.lancedb_utils import (  # noqa: PLC0415
-            lancedb_schema,
-        )
+        from nemo_retriever.vdb.lancedb_bulk import lancedb_schema  # noqa: PLC0415
 
         Path(self.uri).mkdir(parents=True, exist_ok=True)
         db = lancedb_mod.connect(self.uri)
@@ -293,9 +291,7 @@ class LanceDBVDB(VDBRagIngest):
 
         if self.overwrite:
             # Use NRL's handle_lancedb which creates/overwrites and indexes in one shot.
-            from nemo_retriever.vector_store.lancedb_store import (  # noqa: PLC0415
-                handle_lancedb,
-            )
+            from nemo_retriever.vdb.lancedb_bulk import handle_lancedb  # noqa: PLC0415
 
             logger.info(
                 "Writing %d raw NRL records to LanceDB table '%s' (overwrite=True).",
@@ -306,15 +302,15 @@ class LanceDBVDB(VDBRagIngest):
         else:
             # Append path: transform rows via NRL, then add to existing table.
             lancedb_mod = _import_lancedb()
-            from nemo_retriever.vector_store.lancedb_store import (  # noqa: PLC0415
+            from nemo_retriever.vdb.lancedb_bulk import (  # noqa: PLC0415
                 LanceDBConfig,
                 _build_lancedb_rows_from_df,
                 create_lancedb_index,
-            )
-            from nemo_retriever.vector_store.lancedb_utils import (  # noqa: PLC0415
-                create_or_append_lancedb_table,
                 infer_vector_dim,
                 lancedb_schema,
+            )
+            from nemo_retriever.vdb.lancedb_schema import (  # noqa: PLC0415
+                create_or_append_lancedb_table,
             )
 
             cleaned_rows = _build_lancedb_rows_from_df(records)
@@ -419,9 +415,7 @@ class LanceDBVDB(VDBRagIngest):
         """
         lancedb_mod = _import_lancedb()
         import pyarrow as pa  # noqa: PLC0415
-        from nemo_retriever.vector_store.lancedb_utils import (
-            lancedb_schema,  # noqa: PLC0415
-        )
+        from nemo_retriever.vdb.lancedb_bulk import lancedb_schema  # noqa: PLC0415
 
         Path(self.uri).mkdir(parents=True, exist_ok=True)
         db = lancedb_mod.connect(self.uri)

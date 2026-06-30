@@ -113,6 +113,42 @@ class TestNvidiaRAGIngestorInit:
 
         assert ingestor.config.vector_store.name == "elasticsearch"
 
+    def test_store_images_defaults_true_in_non_lite_mode(self):
+        """Store-images is enabled by default outside Lite mode."""
+        with (
+            patch("nvidia_rag.ingestor_server.main.get_nv_ingest_client"),
+            patch("nvidia_rag.ingestor_server.main.get_object_store_operator"),
+        ):
+            ingestor = NvidiaRAGIngestor(mode=Mode.SERVER)
+
+        assert ingestor._should_store_images() is True
+
+    def test_store_images_honors_config_in_non_lite_mode(self):
+        """Non-Lite modes honor the APP_NVINGEST_STOREIMAGES-backed config."""
+        config = NvidiaRAGConfig.from_dict({"nv_ingest": {"store_images": False}})
+
+        with (
+            patch("nvidia_rag.ingestor_server.main.get_nv_ingest_client"),
+            patch("nvidia_rag.ingestor_server.main.get_object_store_operator"),
+        ):
+            ingestor = NvidiaRAGIngestor(config=config, mode=Mode.SERVER)
+
+        assert ingestor._should_store_images() is False
+
+    def test_store_images_forced_false_in_lite_mode(self):
+        """Lite mode never stores image assets, even when configured true."""
+        config = NvidiaRAGConfig.from_dict(
+            {
+                "nv_ingest": {"store_images": True},
+                "vector_store": {"name": "milvus", "url": "./milvus-lite.db"},
+            }
+        )
+
+        with patch("nvidia_rag.ingestor_server.main.get_nv_ingest_client"):
+            ingestor = NvidiaRAGIngestor(config=config, mode=Mode.LITE)
+
+        assert ingestor._should_store_images() is False
+
     def test_init_with_valid_vdb_op(self):
         """Test initialization with valid VDBRag instance."""
         mock_vdb_op = Mock(spec=VDBRag)

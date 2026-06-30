@@ -205,7 +205,6 @@ def make_store_params(config: NvidiaRAGConfig, vdb_op: VDBRag) -> StoreParams:
     Maps (playground-aligned):
         ``config.object_store.*``  → ``storage_options`` (key, secret, client_kwargs)
         ``vdb_op.collection_name`` → path under default bucket, ``.../images`` suffix
-        ``public_base_url``        → same as ``storage_uri`` (optional in NRL; required for metadata)
     """
     collection = vdb_op.collection_name
     if config.object_store.backend == "filesystem":
@@ -226,6 +225,5 @@ def make_store_params(config: NvidiaRAGConfig, vdb_op: VDBRag) -> StoreParams:
         storage_uri = f"s3://{DEFAULT_BUCKET_NAME}/{collection}/images"
     return StoreParams(
         storage_uri=storage_uri,
-        public_base_url=storage_uri,
         storage_options=storage_options,
     )

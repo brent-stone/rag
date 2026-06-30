@@ -217,6 +217,12 @@ class NvidiaRAGIngestor:
                     "Please make sure all the required methods are implemented."
                 )
 
+    def _should_store_images(self) -> bool:
+        """Return whether ingestion should persist extracted image assets."""
+        if self.mode == Mode.LITE:
+            return False
+        return self.config.nv_ingest.store_images
+
     async def health(self, check_dependencies: bool = False) -> IngestorHealthResponse:
         """Check the health of the Ingestion server."""
         if check_dependencies:
@@ -2411,6 +2417,7 @@ class NvidiaRAGIngestor:
             filepaths=filepaths,
             vdb_op=vdb_op,
             split_options=split_options,
+            store_images=self._should_store_images(),
         )
         logger.info(
             "NRL: ingest pipeline completed in %.2f s — %d rows returned",
@@ -2923,7 +2930,7 @@ class NvidiaRAGIngestor:
                 enable_pdf_split_processing=state_manager.enable_pdf_split_processing,
                 pdf_split_processing_options=state_manager.pdf_split_processing_options,
                 prompts=self.prompts,
-                store_images=self.mode != Mode.LITE,
+                store_images=self._should_store_images(),
             )
 
             start_time = time.time()
@@ -3003,7 +3010,7 @@ class NvidiaRAGIngestor:
                 enable_pdf_split_processing=state_manager.enable_pdf_split_processing,
                 pdf_split_processing_options=state_manager.pdf_split_processing_options,
                 prompts=self.prompts,
-                store_images=self.mode != Mode.LITE,
+                store_images=self._should_store_images(),
             )
             start_time = time.time()
             logger.info(
@@ -3051,7 +3058,7 @@ class NvidiaRAGIngestor:
                     enable_pdf_split_processing=state_manager.enable_pdf_split_processing,
                     pdf_split_processing_options=state_manager.pdf_split_processing_options,
                     prompts=self.prompts,
-                    store_images=self.mode != Mode.LITE,
+                    store_images=self._should_store_images(),
                 )
                 start_time = time.time()
                 logger.info(
@@ -3093,7 +3100,7 @@ class NvidiaRAGIngestor:
                     enable_pdf_split_processing=state_manager.enable_pdf_split_processing,
                     pdf_split_processing_options=state_manager.pdf_split_processing_options,
                     prompts=self.prompts,
-                    store_images=self.mode != Mode.LITE,
+                    store_images=self._should_store_images(),
                 )
                 start_time = time.time()
                 logger.info(

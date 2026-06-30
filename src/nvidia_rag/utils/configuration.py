@@ -287,6 +287,11 @@ class NvIngestConfig(_ConfigBase):
         env="APP_NVINGEST_EXTRACTIMAGES",
         description="Enable image extraction from documents",
     )
+    store_images: bool = Field(
+        default=True,
+        env="APP_NVINGEST_STOREIMAGES",
+        description="Store extracted image assets in object storage for citations",
+    )
     extract_page_as_image: bool = Field(
         default=False,
         env="APP_NVINGEST_EXTRACTPAGEASIMAGE",

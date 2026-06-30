@@ -25,7 +25,7 @@ from typing import Any
 
 import pandas as pd
 
-from nemo_retriever.vector_store.lancedb_utils import build_lancedb_rows
+from nemo_retriever.vdb.lancedb_schema import build_lancedb_rows
 
 
 class IngestSchemaManager:
@@ -100,9 +100,6 @@ class IngestSchemaManager:
             vector, text, metadata (JSON), source (JSON), page_number,
             pdf_page, pdf_basename, filename, source_id, path.
 
-        NOTE: When NRL PR #1822 merges, replace ``build_lancedb_rows`` with:
-            from nemo_retriever.vector_store.vdb_records import build_vdb_records
-            return build_vdb_records(self._df)
         """
         if self._df.empty:
             return []

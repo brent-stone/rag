@@ -92,10 +92,11 @@ The `vlm-generation` profile in `deploy/compose/nims.yaml` is designed for VLM-b
    USERID=$(id -u) docker compose -f deploy/compose/nims.yaml --profile vlm-generation --profile ingest up -d
    ```
 
-2. Enable image extraction and captioning for ingestion. In `deploy/compose/docker-compose-ingestor-server.yaml`, under the `ingestor-server` service, set `APP_NVINGEST_EXTRACTIMAGES` to `True` so images are extracted and stored (disabled by default). Image captioning is enabled by default: `APP_NVINGEST_CAPTIONMODELNAME` is set to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` and `APP_NVINGEST_CAPTIONENDPOINTURL` points to the `vlm-ms` service. Override via environment variables if needed:
+2. Enable image extraction and captioning for ingestion. In `deploy/compose/docker-compose-ingestor-server.yaml`, under the `ingestor-server` service, set `APP_NVINGEST_EXTRACTIMAGES` to `True` so images are extracted. Image asset storage is enabled by default with `APP_NVINGEST_STOREIMAGES=True`; set it to `False` only when citation assets should not be stored. Image captioning is enabled by default: `APP_NVINGEST_CAPTIONMODELNAME` is set to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` and `APP_NVINGEST_CAPTIONENDPOINTURL` points to the `vlm-ms` service. Override via environment variables if needed:
 
    ```bash
    export APP_NVINGEST_EXTRACTIMAGES=True
+   export APP_NVINGEST_STOREIMAGES=True
    docker compose -f deploy/compose/docker-compose-ingestor-server.yaml up -d
    ```
 
@@ -155,6 +156,7 @@ Continue with [Deploy with Docker (NVIDIA-Hosted Models)](deploy-docker-nvidia-h
    ingestor-server:
      envVars:
        APP_NVINGEST_EXTRACTIMAGES: "True"
+       APP_NVINGEST_STOREIMAGES: "True"
        APP_NVINGEST_CAPTIONENDPOINTURL: "http://nim-vlm-captioning:8000/v1/chat/completions"
        APP_NVINGEST_CAPTIONMODELNAME: "nvidia/nemotron-nano-12b-v2-vl"
    ```

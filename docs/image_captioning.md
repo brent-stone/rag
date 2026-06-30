@@ -41,6 +41,7 @@ For this feature, use H100 or A100 GPUs instead.
    Export the below environment variable and relaunch the ingestor-server container.
    ```bash
    export APP_NVINGEST_EXTRACTIMAGES="True"
+   export APP_NVINGEST_STOREIMAGES="True"
    export APP_NVINGEST_CAPTIONENDPOINTURL="http://vlm-ms:8000/v1/chat/completions"
    docker compose -f deploy/compose/docker-compose-ingestor-server.yaml up -d
    ```
@@ -56,6 +57,7 @@ For this feature, use H100 or A100 GPUs instead.
    Export the below environment variable and relaunch the ingestor-server container.
    ```bash
    export APP_NVINGEST_EXTRACTIMAGES="True"
+   export APP_NVINGEST_STOREIMAGES="True"
    docker compose -f deploy/compose/docker-compose-ingestor-server.yaml up -d
    ```
 
@@ -87,6 +89,7 @@ To enable image captioning in Helm-based deployments by using an on-prem VLM mod
        
        # === Image Captioning ===
        APP_NVINGEST_EXTRACTIMAGES: "True"
+       APP_NVINGEST_STOREIMAGES: "True"
        APP_NVINGEST_CAPTIONENDPOINTURL: "http://nim-vlm-captioning:8000/v1/chat/completions"
        APP_NVINGEST_CAPTIONMODELNAME: "nvidia/nemotron-nano-12b-v2-vl"
    ```

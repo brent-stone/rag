@@ -219,6 +219,8 @@ envVars:
   APP_VLM_MAX_TOKENS: "32768"
   APP_VLM_TEMPERATURE: "0.6"
   APP_VLM_TOP_P: "0.95"
+  # Ingestion backend: "nv_ingest" (NV-Ingest microservice) or "nrl" (NeMo-Retriever Library in-process)
+  INGESTOR_BACKEND: "nv_ingest"
   # VLM server URL
   APP_VLM_SERVERURL: "http://nim-vlm:8000/v1"
   # VLM model name
@@ -381,6 +383,8 @@ ingestor-server:
     EXAMPLE_PATH: "src/nvidia_rag/ingestor_server"
     # Absolute path to custom prompt.yaml file
     PROMPT_CONFIG_FILE: "/prompt.yaml"
+    # nv_ingest: NV-Ingest microservice; nrl: NeMo-Retriever Library in-process
+    INGESTOR_BACKEND: "nv_ingest"
     # === Vector Store Configurations ===
     APP_VECTORSTORE_URL: "http://rag-eck-elasticsearch-es-default:9200"
     APP_VECTORSTORE_NAME: "elasticsearch"
@@ -432,6 +436,7 @@ ingestor-server:
     APP_NVINGEST_EXTRACTTABLES: "True"  # Enable table extraction
     APP_NVINGEST_EXTRACTCHARTS: "True"  # Enable chart extraction
     APP_NVINGEST_EXTRACTIMAGES: "False"  # Enable image extraction
+    APP_NVINGEST_STOREIMAGES: "True"  # Store extracted image assets for citations
     APP_NVINGEST_EXTRACTPAGEASIMAGE: "False"  # Extracts each page as image if enabled
     APP_NVINGEST_STRUCTURED_ELEMENTS_MODALITY: ""  # "image", "text_image"
     APP_NVINGEST_IMAGE_ELEMENTS_MODALITY: ""  # "image"

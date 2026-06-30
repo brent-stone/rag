@@ -359,6 +359,7 @@ class TestNvIngestConfig:
         assert config.extract_tables is True
         assert config.extract_charts is True
         assert config.extract_images is False
+        assert config.store_images is True
         assert config.pdf_extract_method is None
         assert config.text_depth == "page"
         assert config.tokenizer == "intfloat/e5-large-unsupervised"
@@ -380,6 +381,13 @@ class TestNvIngestConfig:
         config = NvIngestConfig()
 
         assert config.object_store_bucket == "custom-bucket"
+
+    @patch.dict(os.environ, {"APP_NVINGEST_STOREIMAGES": "False"})
+    def test_store_images_from_env(self):
+        """Test store-images environment override."""
+        config = NvIngestConfig()
+
+        assert config.store_images is False
 
     @pytest.mark.parametrize(
         "input_value",

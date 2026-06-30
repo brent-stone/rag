@@ -31,13 +31,14 @@ RUN if [ "$DOWNLOAD_LEGAL_COMPLIANCE" = "true" ]; then \
         apt list --installed 2>/dev/null | tail -n +2 | sed 's|/.*||' | sort -u > /tmp/packages-before.txt; \
     fi
 
-# Install required ubuntu packages for setting up python 3.13
+# Install required ubuntu packages for setting up python 3.12
+# nemo-retriever 26.5.0 requires Python <3.13; Python 3.12 is used to support the NRL backend
 # Update all packages to address security vulnerabilities including CVE-2025-68973 (gpgv)
 RUN apt update && \
     apt upgrade -y && \
     apt install -y curl software-properties-common libgl1 libglib2.0-0 libmagic1 file build-essential && \
     add-apt-repository ppa:deadsnakes/ppa && \
-    apt update && apt upgrade -y && apt install -y python3.13 python3.13-dev && \
+    apt update && apt upgrade -y && apt install -y python3.12 python3.12-dev python3.12-venv && \
     apt-get clean
 
 # Download ONLY sources for packages WE installed (conditional on DOWNLOAD_LEGAL_COMPLIANCE)
@@ -71,7 +72,7 @@ WORKDIR /workspace
 COPY --from=builder /build/pyproject.toml /workspace/
 COPY --from=builder /build/uv.lock /workspace/
 
-RUN uv sync --locked --no-install-project --no-dev --extra ingest --extra elasticsearch
+RUN uv sync --locked --no-install-project --no-dev --extra ingest --extra elasticsearch --extra nrl
 
 COPY --from=builder /build/dist/*.whl /workspace/
 
@@ -119,9 +120,13 @@ ENV DEBIAN_FRONTEND noninteractive
 
 # Install ONLY the essential runtime libraries (no build tools, no Python installation process)
 # Update all packages to address CVE-2025-68973 (gpgv) and other security vulnerabilities
-RUN apt update
-RUN apt upgrade -y
-RUN apt install -y libexpat1 && \
+# apt update + upgrade + install must be a single RUN so the package index is never cached stale
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        libexpat1 \
+        libgl1-mesa-glx libglib2.0-0 \
+        libreoffice-writer libreoffice-impress libreoffice-common && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -133,17 +138,17 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/cacert.pem
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/cacert.pem
 
 # Copy the entire Python installation and virtual environment from python-env stage
-COPY --from=python-env /usr/bin/python3.13 /usr/bin/python3.13
-COPY --from=python-env /usr/lib/python3.13 /usr/lib/python3.13
+COPY --from=python-env /usr/bin/python3.12 /usr/bin/python3.12
+COPY --from=python-env /usr/lib/python3.12 /usr/lib/python3.12
 COPY --from=python-env /workspace/.venv /workspace/.venv
 
 # Copy Python shared libraries using runtime detection
 RUN --mount=from=python-env,source=/usr,target=/mnt/usr \
-    find /mnt/usr -name "libpython3.13.so*" -exec cp -P {} /usr/lib/ \;
+    find /mnt/usr -name "libpython3.12.so*" -exec cp -P {} /usr/lib/ \;
 
 # Create python3 symlink
-RUN ln -sf /usr/bin/python3.13 /usr/bin/python3 && \
-    ln -sf /usr/bin/python3.13 /usr/bin/python
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # Set up environment
 ENV PATH="/workspace/.venv/bin:$PATH"
