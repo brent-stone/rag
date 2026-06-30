@@ -107,10 +107,10 @@ Example of a valid plan with two answer tasks (every task has all three fields):
 
 REMEMBER: every task object must include id AND question AND query. A task missing any of these fields is invalid."""
 
-PLANNER_USER_PROMPT = """User Question: {query}
-{scope_section}
-Initial Retrieval Results (this is a sample, not the full database):
+PLANNER_USER_PROMPT = """Initial Retrieval Results (this is a sample, not the full database):
 {initial_context}
+{scope_section}
+User Question: {query}
 
 Create the retrieval plan:"""
 
@@ -152,10 +152,10 @@ OUTPUT FORMAT — You MUST respond with JSON only:
 - "none": The documents have NO relevant information at all.
   {{"completeness": "none", "answer": "[NO DATA]", "missing": ""}}"""
 
-TASK_ANSWER_USER_PROMPT = """Question: {question}
-
-Documents:
+TASK_ANSWER_USER_PROMPT = """Documents:
 {documents}
+
+Question: {question}
 
 Answer (JSON):"""
 
@@ -224,12 +224,12 @@ Rules:
 13. Do not ask follow-up questions or add disclaimers.
 14. For simple factual lookups (a name, a date, a single value), keep the answer brief and direct. For analysis or multi-part questions, provide thorough detail."""
 
-SYNTHESIS_USER_PROMPT = """User Question: {query}
+SYNTHESIS_USER_PROMPT = """Sub-answers:
+{sub_answers}
+
+User Question: {query}
 {resolved_section}
 Synthesis Instruction: {synthesis_instruction}
-
-Sub-answers:
-{sub_answers}
 
 Final Answer:"""
 
