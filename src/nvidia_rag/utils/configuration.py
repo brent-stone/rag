@@ -476,7 +476,7 @@ class NvIngestConfig(_ConfigBase):
         description='Ingestion backend: "nv_ingest" (default, NV-Ingest microservice) or "nrl" (NeMo-Retriever Library in-process)',
     )
     nrl_run_mode: str = Field(
-        default="batch",
+        default="inprocess",
         env="NRL_RUN_MODE",
         description='NRL GraphIngestor run mode: "inprocess" (default, no Ray cluster) or "batch" (Ray cluster for production throughput)',
     )
@@ -1390,6 +1390,17 @@ class NvidiaRAGConfig(_ConfigBase):
             "When True, requests with use_knowledge_base=True are routed through "
             "the LangGraph plan-and-execute agent instead of the standard RAG chain. "
             "Can be overridden per-request via the agentic parameter in the request body."
+        ),
+    )
+    enable_nrl_native_retrieval: bool = Field(
+        default=False,
+        env="ENABLE_NRL_NATIVE_RETRIEVAL",
+        description=(
+            "When True AND INGESTOR_BACKEND=nrl, the agentic RAG retrieval path "
+            "uses NRL's native nemo_retriever.retriever.Retriever directly "
+            "instead of the LangChain vectorstore wrapper. Standard (non-agentic) "
+            "RAG and the /search endpoint are unaffected — both keep using the "
+            "LangChain path. Has no effect when INGESTOR_BACKEND != 'nrl'."
         ),
     )
     enable_guardrails: bool = Field(

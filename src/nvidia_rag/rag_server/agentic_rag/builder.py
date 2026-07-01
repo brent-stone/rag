@@ -110,9 +110,7 @@ class AgenticLLMOverrides:
     # each role gets its own client with that role's configured model/endpoint
     # but the request-provided generation params applied.
     # Mutable; not part of equality / hashing.
-    _built_llms: dict[str, Any] = field(
-        default_factory=dict, repr=False, compare=False
-    )
+    _built_llms: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def has_any_override(self) -> bool:
         """True if at least one non-None override is set."""
@@ -254,25 +252,57 @@ def make_retriever_fn(
             )
         )
         try:
-            citations = await nvidia_rag.search(
-                query=query,
-                collection_names=p.collection_names,
-                reranker_top_k=effective_reranker_top_k,
-                vdb_top_k=effective_vdb_top_k,
-                vdb_endpoint=p.vdb_endpoint,
-                vdb_auth_token=p.vdb_auth_token,
-                enable_reranker=p.enable_reranker,
-                enable_query_rewriting=p.enable_query_rewriting,
-                enable_filter_generator=p.enable_filter_generator,
-                embedding_model=p.embedding_model,
-                embedding_endpoint=p.embedding_endpoint,
-                reranker_model=p.reranker_model,
-                reranker_endpoint=p.reranker_endpoint,
-                filter_expr=p.filter_expr,
-                confidence_threshold=p.confidence_threshold,
-                enable_citations=p.enable_citations,
-                stage=stage,
+            use_nrl_native = (
+                nvidia_rag.config.enable_nrl_native_retrieval
+                and nvidia_rag._is_nrl_mode
             )
+            if use_nrl_native:
+                from nvidia_rag.rag_server.agentic_rag.nrl_native_retriever import (
+                    run_nrl_native_search,
+                )
+
+                collection_names = p.collection_names or [
+                    nvidia_rag.config.vector_store.default_collection_name
+                ]
+                enable_reranker = (
+                    p.enable_reranker
+                    if p.enable_reranker is not None
+                    else nvidia_rag.config.ranking.enable_reranker
+                )
+                citations = await run_nrl_native_search(
+                    config=nvidia_rag.config,
+                    query=query,
+                    collection_names=collection_names,
+                    vdb_endpoint=p.vdb_endpoint,
+                    vdb_top_k=effective_vdb_top_k
+                    or nvidia_rag.config.retriever.vdb_top_k,
+                    reranker_top_k=effective_reranker_top_k,
+                    enable_reranker=enable_reranker,
+                    reranker_model=p.reranker_model,
+                    reranker_endpoint=p.reranker_endpoint,
+                    confidence_threshold=p.confidence_threshold,
+                    stage=stage,
+                )
+            else:
+                citations = await nvidia_rag.search(
+                    query=query,
+                    collection_names=p.collection_names,
+                    reranker_top_k=effective_reranker_top_k,
+                    vdb_top_k=effective_vdb_top_k,
+                    vdb_endpoint=p.vdb_endpoint,
+                    vdb_auth_token=p.vdb_auth_token,
+                    enable_reranker=p.enable_reranker,
+                    enable_query_rewriting=p.enable_query_rewriting,
+                    enable_filter_generator=p.enable_filter_generator,
+                    embedding_model=p.embedding_model,
+                    embedding_endpoint=p.embedding_endpoint,
+                    reranker_model=p.reranker_model,
+                    reranker_endpoint=p.reranker_endpoint,
+                    filter_expr=p.filter_expr,
+                    confidence_threshold=p.confidence_threshold,
+                    enable_citations=p.enable_citations,
+                    stage=stage,
+                )
             # Group citations by stage in insertion order so runner.py can pick
             # the last stage's results via next(reversed(acc.values())).
             try:
@@ -342,9 +372,7 @@ def _make_role_llm(
     temperature = _resolve_role_generation_param(
         role_cfg, fallback_cfg, rag_config, "temperature"
     )
-    top_p = _resolve_role_generation_param(
-        role_cfg, fallback_cfg, rag_config, "top_p"
-    )
+    top_p = _resolve_role_generation_param(role_cfg, fallback_cfg, rag_config, "top_p")
     max_tokens = _resolve_role_generation_param(
         role_cfg, fallback_cfg, rag_config, "max_tokens"
     )

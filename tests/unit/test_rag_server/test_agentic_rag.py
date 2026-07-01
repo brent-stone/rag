@@ -224,6 +224,8 @@ class TestMakeRetrieverFn:
     @pytest.mark.asyncio
     async def test_forwards_search_kwargs_from_context(self) -> None:
         mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = False
+        mock_rag._is_nrl_mode = False
         mock_rag.search = AsyncMock(
             return_value=Citations(
                 total_results=0,
@@ -255,6 +257,8 @@ class TestMakeRetrieverFn:
     @pytest.mark.asyncio
     async def test_accumulates_citations_when_context_set(self) -> None:
         mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = False
+        mock_rag._is_nrl_mode = False
         sr = SourceResult(
             document_name="n",
             content="c",
@@ -280,7 +284,121 @@ class TestMakeRetrieverFn:
     @pytest.mark.asyncio
     async def test_returns_none_on_search_exception(self) -> None:
         mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = False
+        mock_rag._is_nrl_mode = False
         mock_rag.search = AsyncMock(side_effect=RuntimeError("boom"))
+        retriever = make_retriever_fn(mock_rag, default_reranker_top_k=3)
+        p_token = _agentic_search_params.set(AgenticSearchParams())
+        c_token = _agentic_all_citations.set(OrderedDict())
+        try:
+            assert await retriever("q") is None
+        finally:
+            _agentic_search_params.reset(p_token)
+            _agentic_all_citations.reset(c_token)
+
+    @pytest.mark.asyncio
+    async def test_uses_search_when_flag_on_but_not_nrl_mode(self) -> None:
+        """Flag alone is insufficient — INGESTOR_BACKEND must also be 'nrl'."""
+        mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = True
+        mock_rag._is_nrl_mode = False
+        mock_rag.search = AsyncMock(
+            return_value=Citations(total_results=0, results=[])
+        )
+        retriever = make_retriever_fn(mock_rag, default_reranker_top_k=5)
+        p_token = _agentic_search_params.set(AgenticSearchParams())
+        c_token = _agentic_all_citations.set(OrderedDict())
+        try:
+            await retriever("q")
+            mock_rag.search.assert_awaited_once()
+        finally:
+            _agentic_search_params.reset(p_token)
+            _agentic_all_citations.reset(c_token)
+
+    @pytest.mark.asyncio
+    async def test_uses_nrl_native_when_flag_on_and_nrl_mode(self, monkeypatch) -> None:
+        mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = True
+        mock_rag._is_nrl_mode = True
+        mock_rag.config.vector_store.default_collection_name = "multimodal_data"
+        mock_rag.config.ranking.enable_reranker = True
+        mock_rag.config.retriever.vdb_top_k = 100
+        mock_rag.search = AsyncMock()
+
+        sr = SourceResult(
+            document_name="n", content="c", metadata=SourceMetadata(), stage="rag"
+        )
+        run_nrl_native_search = AsyncMock(
+            return_value=Citations(total_results=1, results=[sr])
+        )
+        monkeypatch.setattr(
+            "nvidia_rag.rag_server.agentic_rag.nrl_native_retriever.run_nrl_native_search",
+            run_nrl_native_search,
+        )
+
+        retriever = make_retriever_fn(mock_rag, default_reranker_top_k=7)
+        params = AgenticSearchParams(collection_names=["col_a"], vdb_top_k=12)
+        p_token = _agentic_search_params.set(params)
+        c_token = _agentic_all_citations.set(OrderedDict())
+        try:
+            out = await retriever("search me", stage="rag")
+            assert out is not None
+            mock_rag.search.assert_not_awaited()
+            run_nrl_native_search.assert_awaited_once()
+            call_kw = run_nrl_native_search.await_args.kwargs
+            assert call_kw["query"] == "search me"
+            assert call_kw["collection_names"] == ["col_a"]
+            assert call_kw["vdb_top_k"] == 12
+            assert call_kw["reranker_top_k"] == 7
+            assert call_kw["stage"] == "rag"
+        finally:
+            _agentic_search_params.reset(p_token)
+            _agentic_all_citations.reset(c_token)
+
+    @pytest.mark.asyncio
+    async def test_nrl_native_path_accumulates_citations(self, monkeypatch) -> None:
+        mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = True
+        mock_rag._is_nrl_mode = True
+        mock_rag.config.vector_store.default_collection_name = "multimodal_data"
+        mock_rag.config.ranking.enable_reranker = True
+        mock_rag.config.retriever.vdb_top_k = 100
+
+        sr = SourceResult(
+            document_name="n", content="c", metadata=SourceMetadata(), stage="execute"
+        )
+        monkeypatch.setattr(
+            "nvidia_rag.rag_server.agentic_rag.nrl_native_retriever.run_nrl_native_search",
+            AsyncMock(return_value=Citations(total_results=1, results=[sr])),
+        )
+
+        retriever = make_retriever_fn(mock_rag, default_reranker_top_k=5)
+        acc: OrderedDict[str, list[SourceResult]] = OrderedDict()
+        p_token = _agentic_search_params.set(AgenticSearchParams())
+        c_token = _agentic_all_citations.set(acc)
+        try:
+            await retriever("q", stage="execute")
+            assert "execute" in acc
+            assert len(acc["execute"]) == 1
+            assert acc["execute"][0].document_name == "n"
+        finally:
+            _agentic_search_params.reset(p_token)
+            _agentic_all_citations.reset(c_token)
+
+    @pytest.mark.asyncio
+    async def test_nrl_native_path_exception_returns_none(self, monkeypatch) -> None:
+        mock_rag = MagicMock()
+        mock_rag.config.enable_nrl_native_retrieval = True
+        mock_rag._is_nrl_mode = True
+        mock_rag.config.vector_store.default_collection_name = "multimodal_data"
+        mock_rag.config.ranking.enable_reranker = True
+        mock_rag.config.retriever.vdb_top_k = 100
+
+        monkeypatch.setattr(
+            "nvidia_rag.rag_server.agentic_rag.nrl_native_retriever.run_nrl_native_search",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        )
+
         retriever = make_retriever_fn(mock_rag, default_reranker_top_k=3)
         p_token = _agentic_search_params.set(AgenticSearchParams())
         c_token = _agentic_all_citations.set(OrderedDict())

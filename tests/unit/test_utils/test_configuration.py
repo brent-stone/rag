@@ -477,6 +477,7 @@ class TestNvidiaRAGConfig:
         assert config.enable_guardrails is False
         assert config.enable_citations is True
         assert config.enable_vlm_inference is False
+        assert config.enable_nrl_native_retrieval is False
         assert config.temp_dir == "./tmp-data"
 
     @patch.dict(os.environ, {}, clear=True)
@@ -486,6 +487,7 @@ class TestNvidiaRAGConfig:
             "ENABLE_GUARDRAILS": "true",
             "ENABLE_CITATIONS": "false",
             "ENABLE_VLM_INFERENCE": "true",
+            "ENABLE_NRL_NATIVE_RETRIEVAL": "true",
             "TEMP_DIR": "/custom/temp",
         }
 
@@ -495,6 +497,7 @@ class TestNvidiaRAGConfig:
             assert config.enable_guardrails is True
             assert config.enable_citations is False
             assert config.enable_vlm_inference is True
+            assert config.enable_nrl_native_retrieval is True
             assert config.temp_dir == "/custom/temp"
 
     @patch.dict(os.environ, {}, clear=True)

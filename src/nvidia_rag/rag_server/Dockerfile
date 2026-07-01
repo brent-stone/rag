@@ -31,11 +31,12 @@ RUN if [ "$DOWNLOAD_LEGAL_COMPLIANCE" = "true" ]; then \
         apt list --installed 2>/dev/null | tail -n +2 | sed 's|/.*||' | sort -u > /tmp/packages-before.txt; \
     fi
 
-# Install required ubuntu packages for setting up python 3.13
+# Install required ubuntu packages for setting up python 3.12
+# nemo-retriever 26.5.0 requires Python <3.13; Python 3.12 is used to support the NRL native retriever
 RUN apt update && \
     apt install -y curl software-properties-common libgl1 libglib2.0-0 libmagic1 file build-essential && \
     add-apt-repository ppa:deadsnakes/ppa && \
-    apt update && apt install -y python3.13 python3.13-dev && \
+    apt update && apt install -y python3.12 python3.12-dev && \
     apt-get clean
 
 # Download ONLY sources for packages WE installed (conditional on DOWNLOAD_LEGAL_COMPLIANCE)
@@ -69,7 +70,7 @@ WORKDIR /workspace
 COPY --from=builder /build/pyproject.toml /workspace/
 COPY --from=builder /build/uv.lock /workspace/
 
-RUN uv sync --locked --no-install-project --no-dev --extra rag --extra elasticsearch
+RUN uv sync --locked --no-install-project --no-dev --extra rag --extra elasticsearch --extra nrl
 
 COPY --from=builder /build/dist/*.whl /workspace/
 
@@ -119,17 +120,17 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/cacert.pem
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/cacert.pem
 
 # Copy the entire Python installation and virtual environment from python-env stage
-COPY --from=python-env /usr/bin/python3.13 /usr/bin/python3.13
-COPY --from=python-env /usr/lib/python3.13 /usr/lib/python3.13
+COPY --from=python-env /usr/bin/python3.12 /usr/bin/python3.12
+COPY --from=python-env /usr/lib/python3.12 /usr/lib/python3.12
 COPY --from=python-env /workspace/.venv /workspace/.venv
 
 # Copy Python shared libraries using runtime detection
 RUN --mount=from=python-env,source=/usr,target=/mnt/usr \
-    find /mnt/usr -name "libpython3.13.so*" -exec cp -P {} /usr/lib/ \;
+    find /mnt/usr -name "libpython3.12.so*" -exec cp -P {} /usr/lib/ \;
 
 # Create python3 symlink
-RUN ln -s /usr/bin/python3.13 /usr/bin/python3 && \
-    ln -s /usr/bin/python3.13 /usr/bin/python
+RUN ln -s /usr/bin/python3.12 /usr/bin/python3 && \
+    ln -s /usr/bin/python3.12 /usr/bin/python
 
 # Set up environment
 ENV PATH="/workspace/.venv/bin:$PATH"

@@ -221,6 +221,10 @@ envVars:
   APP_VLM_TOP_P: "0.95"
   # Ingestion backend: "nv_ingest" (NV-Ingest microservice) or "nrl" (NeMo-Retriever Library in-process)
   INGESTOR_BACKEND: "nv_ingest"
+  # When True AND INGESTOR_BACKEND=nrl, agentic RAG retrieval uses NRL's native
+  # Retriever directly instead of the LangChain vectorstore wrapper. No effect
+  # on standard RAG or the /search endpoint.
+  ENABLE_NRL_NATIVE_RETRIEVAL: "False"
   # VLM server URL
   APP_VLM_SERVERURL: "http://nim-vlm:8000/v1"
   # VLM model name

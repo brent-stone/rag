@@ -123,7 +123,7 @@ class NemoRetrieverHandler:
 
     def __init__(self, config: NvidiaRAGConfig) -> None:
         self._config = config
-        self._run_mode: str = getattr(config.nv_ingest, "nrl_run_mode", "batch")
+        self._run_mode: str = getattr(config.nv_ingest, "nrl_run_mode", "inprocess")
         # One pipeline at a time: NRL / Ray owns its own worker threads.
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
         logger.info(
