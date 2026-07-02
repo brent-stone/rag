@@ -166,9 +166,25 @@ def _hit_to_source_result(hit: dict[str, Any], stage: str) -> SourceResult | Non
     except (TypeError, ValueError):
         page_number = 0
 
-    score = float(
-        hit.get("_score") or hit.get("relevance_score") or hit.get("_distance") or 0.0
-    )
+    # Normalize the hit's score so that HIGHER = BETTER, matching the descending
+    # sort in run_nrl_native_search().
+    #   - "rerank_score": nemo_retriever's reranker relevance (higher = better).
+    #     This is the field the reranker actually writes
+    #     (retriever_graph_utils.rerank_long_dataframe_to_hits, score_column).
+    #   - "_score": dense similarity for metrics that emit one (higher = better).
+    #   - "_distance": L2 distance from LanceDB (LOWER = better) — negate it so a
+    #     single descending sort stays correct on the dense-only path.
+    rerank_score = hit.get("rerank_score")
+    dense_score = hit.get("_score")
+    distance = hit.get("_distance")
+    if rerank_score is not None:
+        score = float(rerank_score)
+    elif dense_score is not None:
+        score = float(dense_score)
+    elif distance is not None:
+        score = -float(distance)  # L2 distance: lower is better -> negate
+    else:
+        score = 0.0
 
     return SourceResult(
         content=content,
