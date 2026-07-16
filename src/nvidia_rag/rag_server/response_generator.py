@@ -1004,7 +1004,7 @@ def prepare_citations(
 
             # If content is empty for image/text/table/chart/audio, skip adding to citations
             # No content: asset is not available in object storage, may cause an error in the UI client
-            if content and document_type in [
+            if source_metadata.description and document_type in [
                 "image",
                 "text",
                 "table",
