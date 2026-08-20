@@ -15,11 +15,11 @@ To navigate this page more easily, click the outline button at the top of the pa
 
 ### Change the LLM Model
 
-The default LLM is `nvidia/nemotron-3-super-120b-a12b`. To use a different model from the API catalog,
+The default NVIDIA-hosted LLM is `nvidia/nemotron-3-ultra-550b-a55b`. To use a different model from the API catalog,
 specify the model in the `APP_LLM_MODELNAME` environment variable when you start the RAG Server.
 
 ```console
-export APP_LLM_MODELNAME='nvidia/nemotron-3-super-120b-a12b'
+export APP_LLM_MODELNAME='nvidia/nemotron-3-ultra-550b-a55b'
 docker compose -f deploy/compose/docker-compose-rag-server.yaml up -d
 ```
 
@@ -48,7 +48,7 @@ Both names refer to the same underlying model. Use the appropriate name based on
 
 ##### Nemotron 3 Super
 
-`nvidia/nemotron-3-super-120b-a12b` is the default LLM for this blueprint. For hardware requirements and RTX PRO 6000-specific setup, see the [Nemotron 3 Super deployment guide](nemotron3-super-deployment.md).
+`nvidia/nemotron-3-super-120b-a12b` is the default self-hosted/on-prem LLM for this blueprint. For hardware requirements and RTX PRO 6000-specific setup, see the [Nemotron 3 Super deployment guide](nemotron3-super-deployment.md).
 
 ##### Nemotron 3 Ultra
 
@@ -408,6 +408,90 @@ Apply with [Change a Deployment](deploy-helm.md#change-a-deployment).
 
 :::{warning}
 **Re-ingest after switching.** Vectors produced by the VLM embedder are not directly comparable to vectors from the text-only embedder; retrieval accuracy will degrade until you re-ingest your corpus.
+:::
+
+
+
+## Migrate to Nemotron 3 Embed 1B (`nemotron-3-embed-1b:2.2.1`)
+
+To swap the embedder for the `nvcr.io/nim/nvidia/nemotron-3-embed-1b:2.2.1` NIM, repoint the text embedding service (`nemotron-embedding-ms`) at the new image and update the embedding model name everywhere ingestion and retrieval read it. This NIM serves the model as `nvidia/nemotron-3-embed-1b` and produces **2048-dimensional** embeddings. The steps below cover **Docker Compose** and **library (lite) mode**.
+
+### Docker Compose
+
+1. In [`deploy/compose/nims.yaml`](../deploy/compose/nims.yaml), update the `nemotron-embedding-ms` service image:
+
+   ```yaml
+   nemotron-embedding-ms:
+     container_name: nemotron-embedding-ms
+     image: nvcr.io/nim/nvidia/nemotron-3-embed-1b:2.2.1
+   ```
+
+2. Start (or restart) the text embedding NIM. It is gated behind the `text-embed` profile and published on host port `9080`:
+
+   ```bash
+   export USERID=$(id -u)
+   export NGC_API_KEY="nvapi-..."
+   export EMBEDDING_MS_GPU_ID=0   # optional GPU pinning
+
+   docker compose -f deploy/compose/nims.yaml --profile text-embed up -d
+   ```
+
+3. Point the RAG and ingestor servers at the new embedder. The default stack uses the VLM embedder, so you must override both the model name and the server URL:
+
+   ```bash
+   export APP_EMBEDDINGS_MODELNAME="nvidia/nemotron-3-embed-1b"
+   export APP_EMBEDDINGS_SERVERURL="nemotron-embedding-ms:8000/v1"
+   export APP_EMBEDDINGS_DIMENSIONS=2048
+   ```
+
+4. Recreate the servers so the ingestion (nv-ingest) and retrieval paths both pick up the new values:
+
+   ```bash
+   docker compose -f deploy/compose/docker-compose-ingestor-server.yaml up -d
+   docker compose -f deploy/compose/docker-compose-rag-server.yaml up -d
+   ```
+
+### Library (lite) mode
+
+Library mode reads its models from `config.yaml` (see [`notebooks/config.yaml`](../notebooks/config.yaml)). You can either edit the file or override the config object before constructing the ingestor/RAG objects.
+
+1. Make the NIM reachable — either run it locally with the `text-embed` profile above (host port `9080`), or use the NVIDIA-hosted endpoint `https://integrate.api.nvidia.com/v1`.
+
+   The NVIDIA-hosted endpoint requires an API key (a locally hosted NIM does not). Provide it with `embeddings.api_key` in `config.yaml` (or the `APP_EMBEDDINGS_APIKEY` environment variable); if that is unset, it falls back to the `NVIDIA_API_KEY` or `NGC_API_KEY` environment variable.
+
+2. Update the `embeddings` block in `config.yaml`:
+
+   ```yaml
+   embeddings:
+     model_name: "nvidia/nemotron-3-embed-1b"
+     dimensions: 2048
+     server_url: "http://localhost:9080/v1"    # or https://integrate.api.nvidia.com/v1 for NVIDIA-hosted
+     # api_key: "<api-key>"                     # required for the NVIDIA-hosted endpoint; falls back to NVIDIA_API_KEY / NGC_API_KEY
+   ```
+
+   Or override the loaded config object in code (matches the pattern in [`notebooks/rag_library_lite_usage.ipynb`](../notebooks/rag_library_lite_usage.ipynb)):
+
+   ```python
+   from pydantic import SecretStr
+
+   from nvidia_rag import NvidiaRAGIngestor
+   from nvidia_rag.utils.configuration import NvidiaRAGConfig
+
+   config = NvidiaRAGConfig.from_yaml("config.yaml")
+   config.embeddings.model_name = "nvidia/nemotron-3-embed-1b"
+   config.embeddings.server_url = "http://localhost:9080/v1"
+   config.embeddings.dimensions = 2048
+   # For the NVIDIA-hosted endpoint, set an API key here (or via APP_EMBEDDINGS_APIKEY);
+   # if unset it falls back to the NVIDIA_API_KEY / NGC_API_KEY environment variable.
+   # config.embeddings.api_key = SecretStr("<api-key>")
+
+   ingestor = NvidiaRAGIngestor(config=config, mode="lite")
+   ```
+
+3. Use the same `config` (same `model_name`, `server_url`, and `dimensions`) for both the `NvidiaRAGIngestor` and the `NvidiaRAG` objects so ingestion and retrieval share one embedding space.
+
+:::{warning}
+**Re-ingest after migrating.** Embeddings from `nemotron-3-embed-1b` are not comparable to those from the previous embedder. Drop or recreate your collection and re-ingest your corpus after switching, in both Docker Compose and library mode.
 :::
 
 
