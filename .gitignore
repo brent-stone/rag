@@ -3,6 +3,7 @@
 **__pycache__**
 src/nvidia_rag.egg-info/
 dist/*
+.idea
 
 # Helm Exclusions
 **/helm-charts/*.tgz
