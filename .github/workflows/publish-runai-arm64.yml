@@ -1,0 +1,357 @@
+name: Publish RUN:AI ARM64 Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_prefix:
+        description: Prefix for the run-specific image and release tag
+        required: true
+        default: runai-arm64
+        type: string
+      audit_external_images:
+        description: Require every enabled NVIDIA NIM to publish linux/arm64
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_number }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  NV_INGEST_REPOSITORY: NVIDIA/NeMo-Retriever
+  NV_INGEST_VERSION: "26.3.0"
+  NV_INGEST_COMMIT: b1aa9729809bd46c0b4f089ccd0ead946303eba3
+
+jobs:
+  prepare:
+    name: Prepare immutable release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      chart_version: ${{ steps.metadata.outputs.chart_version }}
+      registry: ${{ steps.metadata.outputs.registry }}
+      chart_filename: ${{ steps.metadata.outputs.chart_filename }}
+    steps:
+      - name: Checkout RAG source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install release helper dependency
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.2
+
+      - name: Derive release metadata
+        id: metadata
+        run: |
+          python scripts/runai_arm64_release.py metadata \
+            --prefix "${{ inputs.release_prefix }}" \
+            --run-number "${{ github.run_number }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --owner "${{ github.repository_owner }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+  build-app-images:
+    name: Build ARM64 ${{ matrix.image }}
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: rag-server
+            context: .
+            dockerfile: src/nvidia_rag/rag_server/Dockerfile
+            build_args: |
+              DOWNLOAD_LEGAL_COMPLIANCE=true
+          - image: ingestor-server
+            context: .
+            dockerfile: src/nvidia_rag/ingestor_server/Dockerfile
+            build_args: |
+              DOWNLOAD_LEGAL_COMPLIANCE=true
+          - image: rag-frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            build_args: |
+              DOWNLOAD_LEGAL_COMPLIANCE=true
+              VITE_API_CHAT_URL=http://rag-server:8081/v1
+              VITE_API_VDB_URL=http://ingestor-server:8082/v1
+    steps:
+      - name: Checkout RAG source
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish ARM64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ needs.prepare.outputs.registry }}/${{ matrix.image }}:${{ needs.prepare.outputs.release_tag }}
+          build-args: ${{ matrix.build_args }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.release_tag }}
+            org.opencontainers.image.licenses=Apache-2.0
+          cache-from: type=gha,scope=${{ matrix.image }}-arm64
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-arm64
+          provenance: mode=max
+          sbom: true
+
+  build-nv-ingest:
+    name: Build ARM64 NV-Ingest 26.3.0
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout pinned NV-Ingest source
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.NV_INGEST_REPOSITORY }}
+          ref: ${{ env.NV_INGEST_COMMIT }}
+          path: nv-ingest-source
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish pinned ARM64 NV-Ingest
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nv-ingest-source
+          file: ./nv-ingest-source/Dockerfile
+          target: runtime
+          platforms: linux/arm64
+          push: true
+          tags: ${{ needs.prepare.outputs.registry }}/nv-ingest:${{ needs.prepare.outputs.release_tag }}
+          build-args: |
+            BASE_IMG=ubuntu
+            BASE_IMG_TAG=jammy-20250415.1
+            DOWNLOAD_LLAMA_TOKENIZER=True
+            GIT_COMMIT=${{ env.NV_INGEST_COMMIT }}
+          secrets: |
+            hf_token=${{ secrets.HF_ACCESS_TOKEN }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/NVIDIA/NeMo-Retriever
+            org.opencontainers.image.revision=${{ env.NV_INGEST_COMMIT }}
+            org.opencontainers.image.version=${{ env.NV_INGEST_VERSION }}
+            org.opencontainers.image.licenses=Apache-2.0
+          cache-from: type=gha,scope=nv-ingest-arm64
+          cache-to: type=gha,mode=max,scope=nv-ingest-arm64
+          provenance: mode=max
+          sbom: true
+
+  package-and-release:
+    name: Verify images and publish customized Helm chart
+    needs:
+      - prepare
+      - build-app-images
+      - build-nv-ingest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout RAG source
+        uses: actions/checkout@v5
+
+      - name: Checkout NV-Ingest license
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.NV_INGEST_REPOSITORY }}
+          ref: ${{ env.NV_INGEST_COMMIT }}
+          path: nv-ingest-license
+          sparse-checkout: LICENSE
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install release helper dependency
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.2
+
+      - name: Set up Docker Buildx for remote inspection
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Prepare release workspace and customized chart
+        id: workspace
+        run: |
+          release_dir="$RUNNER_TEMP/runai-arm64-release"
+          chart_dir="$RUNNER_TEMP/nvidia-blueprint-rag"
+          mkdir -p "$release_dir"
+          cp -a deploy/helm/nvidia-blueprint-rag "$chart_dir"
+          python scripts/runai_arm64_release.py customize-chart \
+            --chart-dir "$chart_dir" \
+            --registry "${{ needs.prepare.outputs.registry }}" \
+            --release-tag "${{ needs.prepare.outputs.release_tag }}" \
+            --chart-version "${{ needs.prepare.outputs.chart_version }}"
+          cp nv-ingest-license/LICENSE "$release_dir/NV-INGEST-LICENSE-${{ env.NV_INGEST_VERSION }}.txt"
+          echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
+          echo "chart_dir=$chart_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Verify anonymous access to published ARM64 images
+        env:
+          REGISTRY: ${{ needs.prepare.outputs.registry }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          REPORT: ${{ steps.workspace.outputs.release_dir }}/published-images.md
+        run: |
+          if ! python scripts/runai_arm64_release.py audit \
+            --image "$REGISTRY/rag-server:$RELEASE_TAG" \
+            --image "$REGISTRY/ingestor-server:$RELEASE_TAG" \
+            --image "$REGISTRY/rag-frontend:$RELEASE_TAG" \
+            --image "$REGISTRY/nv-ingest:$RELEASE_TAG" \
+            --markdown-output "$REPORT"; then
+            echo "::error::GHCR packages are not anonymously readable as linux/arm64."
+            echo "Make the four packages public under https://github.com/users/${{ github.repository_owner }}/packages, then rerun this workflow."
+            exit 1
+          fi
+
+      - name: Validate NGC credential
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          if [ -z "$NGC_API_KEY" ]; then
+            echo "::error::Add an NGC_API_KEY repository secret for Helm dependencies and NIM manifest inspection."
+            exit 1
+          fi
+
+      - name: Log in to NGC
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: printf '%s' "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+
+      - name: Audit enabled external NVIDIA NIM images
+        if: ${{ inputs.audit_external_images }}
+        run: |
+          python scripts/runai_arm64_release.py audit \
+            --values "${{ steps.workspace.outputs.chart_dir }}/values.yaml" \
+            --markdown-output "${{ steps.workspace.outputs.release_dir }}/external-nim-images.md"
+
+      - name: Record skipped external image audit
+        if: ${{ !inputs.audit_external_images }}
+        run: |
+          printf '%s\n' \
+            '## External NVIDIA NIM ARM64 audit' \
+            '' \
+            'UNVERIFIED: audit_external_images was disabled for this diagnostic release.' \
+            > "${{ steps.workspace.outputs.release_dir }}/external-nim-images.md"
+
+      - name: Resolve and lint Helm dependencies
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          CHART_DIR: ${{ steps.workspace.outputs.chart_dir }}
+        run: |
+          helm repo add nvidia https://helm.ngc.nvidia.com/nvidia/nemo-microservices \
+            --username '$oauthtoken' --password "$NGC_API_KEY" --force-update
+          helm repo add seaweedfs https://seaweedfs.github.io/seaweedfs/helm --force-update
+          helm repo add elastic https://helm.elastic.co --force-update
+          helm repo add zipkin https://zipkin.io/zipkin-helm --force-update
+          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts --force-update
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+          helm repo update
+          helm dependency update "$CHART_DIR"
+          helm lint "$CHART_DIR"
+
+      - name: Package customized Helm chart
+        env:
+          CHART_DIR: ${{ steps.workspace.outputs.chart_dir }}
+          RELEASE_DIR: ${{ steps.workspace.outputs.release_dir }}
+          CHART_FILENAME: ${{ needs.prepare.outputs.chart_filename }}
+        run: |
+          helm package "$CHART_DIR" --destination "$RELEASE_DIR"
+          test -f "$RELEASE_DIR/$CHART_FILENAME"
+
+      - name: Create release notes
+        env:
+          RELEASE_DIR: ${{ steps.workspace.outputs.release_dir }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          CHART_FILENAME: ${{ needs.prepare.outputs.chart_filename }}
+          REGISTRY: ${{ needs.prepare.outputs.registry }}
+        run: |
+          notes="$RELEASE_DIR/release-notes.md"
+          {
+            echo "# RUN:AI ARM64 RAG release $RELEASE_TAG"
+            echo
+            echo "Built natively for linux/arm64 for NVIDIA DGX GB300 testing."
+            echo
+            echo "NV-Ingest source: NVIDIA/NeMo-Retriever@$NV_INGEST_COMMIT (release $NV_INGEST_VERSION)."
+            echo
+            echo "Chart: $CHART_FILENAME"
+            echo
+            echo "## Published images"
+            echo
+            sed -n '1,20p' "$RELEASE_DIR/published-images.md"
+            echo
+            echo "## External dependency audit"
+            echo
+            sed -n '1,40p' "$RELEASE_DIR/external-nim-images.md"
+          } > "$notes"
+
+      - name: Publish public GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_DIR: ${{ steps.workspace.outputs.release_dir }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          CHART_FILENAME: ${{ needs.prepare.outputs.chart_filename }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "$RELEASE_DIR/$CHART_FILENAME" \
+            "$RELEASE_DIR/NV-INGEST-LICENSE-${{ env.NV_INGEST_VERSION }}.txt" \
+            "$RELEASE_DIR/published-images.md" \
+            "$RELEASE_DIR/external-nim-images.md" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RUN:AI ARM64 RAG $RELEASE_TAG" \
+            --notes-file "$RELEASE_DIR/release-notes.md" \
+            --latest=false
+
+      - name: Publish URLs and RUN:AI install command
+        env:
+          RELEASE_DIR: ${{ steps.workspace.outputs.release_dir }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          CHART_FILENAME: ${{ needs.prepare.outputs.chart_filename }}
+        run: |
+          release_url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          chart_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$CHART_FILENAME"
+          {
+            echo "## RUN:AI ARM64 release published"
+            echo
+            echo "- Release: $release_url"
+            echo "- Helm chart: $chart_url"
+            echo
+            echo "### Published image manifests"
+            echo
+            sed -n '1,20p' "$RELEASE_DIR/published-images.md"
+            echo
+            echo "### Install from the RUN:AI Helm deployment tool"
+            echo
+            echo "    helm upgrade --install rag $chart_url --namespace nv-nvidia-blueprint-rag --create-namespace --set imagePullSecret.password=\"\$NGC_API_KEY\" --set ngcApiSecret.password=\"\$NGC_API_KEY\""
+          } >> "$GITHUB_STEP_SUMMARY"
