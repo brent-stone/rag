@@ -188,6 +188,33 @@ def patch_nv_ingest_dependency(chart_dir: Path) -> None:
             bundle.add(dependency_root, arcname=dependency_root.name)
 
 
+def pin_nv_ingest_runtime_dependencies(source_dir: Path) -> None:
+    """Replace NV-Ingest's unbounded Triton dependency with a tested stack."""
+
+    dependency_pins = (
+        "tritonclient[grpc]==2.57.0",
+        "protobuf==5.29.6",
+        "grpcio==1.67.1",
+        "grpcio-tools==1.67.1",
+    )
+    unbounded_dependency = '    "tritonclient",'
+    pinned_dependencies = "\n".join(
+        f'    "{dependency}",' for dependency in dependency_pins
+    )
+
+    for relative_path in (Path("api/pyproject.toml"), Path("src/pyproject.toml")):
+        path = source_dir / relative_path
+        content = path.read_text(encoding="utf-8")
+        if content.count(unbounded_dependency) != 1:
+            raise ValueError(
+                f"expected one unbounded tritonclient dependency in {path}"
+            )
+        path.write_text(
+            content.replace(unbounded_dependency, pinned_dependencies),
+            encoding="utf-8",
+        )
+
+
 def customize_chart(
     chart_dir: Path,
     registry: str,
@@ -416,6 +443,12 @@ def _patch_nv_ingest_chart_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pin_nv_ingest_runtime_dependencies_command(args: argparse.Namespace) -> int:
+    pin_nv_ingest_runtime_dependencies(args.source_dir)
+    print(f"Pinned NV-Ingest runtime dependencies in {args.source_dir}")
+    return 0
+
+
 def _audit_command(args: argparse.Namespace) -> int:
     images = set(args.image)
     if args.values is not None:
@@ -475,6 +508,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     patch_nv_ingest.add_argument("--chart-dir", required=True, type=Path)
     patch_nv_ingest.set_defaults(handler=_patch_nv_ingest_chart_command)
+
+    pin_nv_ingest_runtime = subparsers.add_parser(
+        "pin-nv-ingest-runtime-dependencies",
+        help="pin the NV-Ingest Triton, gRPC, and protobuf dependency stack",
+    )
+    pin_nv_ingest_runtime.add_argument("--source-dir", required=True, type=Path)
+    pin_nv_ingest_runtime.set_defaults(
+        handler=_pin_nv_ingest_runtime_dependencies_command
+    )
 
     audit = subparsers.add_parser(
         "audit", help="require linux/arm64 manifests for remote images"

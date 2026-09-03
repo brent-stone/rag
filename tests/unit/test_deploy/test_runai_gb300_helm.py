@@ -1,13 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
+import subprocess
+import sys
 import tarfile
+import tomllib
+from pathlib import Path
 
 import yaml
 
+import scripts.runai_arm64_release as runai_release
 from scripts.runai_arm64_release import deep_merge, patch_nv_ingest_dependency
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHART_DIR = REPO_ROOT / "deploy" / "helm" / "nvidia-blueprint-rag"
@@ -185,6 +188,41 @@ def test_arm64_release_validates_and_publishes_runai_values() -> None:
     assert 'echo "- RUN:AI values: $values_url"' in workflow
 
 
+def test_arm64_release_pins_and_validates_nv_ingest_grpc_stack() -> None:
+    workflow = _load_yaml(WORKFLOW_PATH)
+
+    assert (
+        workflow["env"]
+        | {
+            "NV_INGEST_TRITONCLIENT_VERSION": "2.57.0",
+            "NV_INGEST_PROTOBUF_VERSION": "5.29.6",
+            "NV_INGEST_GRPCIO_VERSION": "1.67.1",
+            "NV_INGEST_GRPCIO_TOOLS_VERSION": "1.67.1",
+        }
+        == workflow["env"]
+    )
+
+    steps = workflow["jobs"]["build-nv-ingest"]["steps"]
+    patch_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Pin NV-Ingest gRPC and protobuf dependencies"
+    )
+    assert "pin-nv-ingest-runtime-dependencies" in patch_step["run"]
+    assert "--source-dir nv-ingest-source" in patch_step["run"]
+
+    smoke_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify NV-Ingest runtime dependency compatibility"
+    )
+    assert "import tritonclient.grpc" in smoke_step["run"]
+    assert "NV_INGEST_TRITONCLIENT_VERSION" in smoke_step["run"]
+    assert "NV_INGEST_PROTOBUF_VERSION" in smoke_step["run"]
+    assert "NV_INGEST_GRPCIO_VERSION" in smoke_step["run"]
+    assert "NV_INGEST_GRPCIO_TOOLS_VERSION" in smoke_step["run"]
+
+
 def test_deep_merge_builds_effective_values_without_mutating_inputs() -> None:
     base = {
         "nimOperator": {
@@ -250,3 +288,69 @@ def test_patch_nv_ingest_dependency_makes_runtime_secret_configurable(
     assert f"name: {configurable_name}" in deployment
     assert f"name: {configurable_name}" in secret
     assert dependency_values["ngcApiSecret"]["name"] == "ngc-api"
+
+
+def test_pin_nv_ingest_runtime_dependencies_replaces_unbounded_grpc_stack(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "nv-ingest-source"
+    for component in ("api", "src"):
+        component_dir = source_dir / component
+        component_dir.mkdir(parents=True)
+        (component_dir / "pyproject.toml").write_text(
+            '[project]\nname = "nv-ingest-test"\ndependencies = [\n'
+            '    "requests>=2",\n'
+            '    "tritonclient",\n'
+            "]\n",
+            encoding="utf-8",
+        )
+
+    runai_release.pin_nv_ingest_runtime_dependencies(source_dir)
+
+    expected_pins = {
+        "tritonclient[grpc]==2.57.0",
+        "protobuf==5.29.6",
+        "grpcio==1.67.1",
+        "grpcio-tools==1.67.1",
+    }
+    for component in ("api", "src"):
+        project = tomllib.loads(
+            (source_dir / component / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]
+        dependencies = set(project["dependencies"])
+        assert expected_pins <= dependencies
+        assert "tritonclient" not in dependencies
+
+
+def test_pin_nv_ingest_runtime_dependencies_cli_patches_source_tree(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "nv-ingest-source"
+    for component in ("api", "src"):
+        component_dir = source_dir / component
+        component_dir.mkdir(parents=True)
+        (component_dir / "pyproject.toml").write_text(
+            '[project]\ndependencies = [\n    "tritonclient",\n]\n',
+            encoding="utf-8",
+        )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "runai_arm64_release.py"),
+            "pin-nv-ingest-runtime-dependencies",
+            "--source-dir",
+            str(source_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Pinned NV-Ingest runtime dependencies" in completed.stdout
+    for component in ("api", "src"):
+        dependencies = tomllib.loads(
+            (source_dir / component / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]["dependencies"]
+        assert "tritonclient[grpc]==2.57.0" in dependencies

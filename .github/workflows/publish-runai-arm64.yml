@@ -27,6 +27,10 @@ env:
   NV_INGEST_REPOSITORY: NVIDIA/NeMo-Retriever
   NV_INGEST_VERSION: "26.3.0"
   NV_INGEST_COMMIT: b1aa9729809bd46c0b4f089ccd0ead946303eba3
+  NV_INGEST_TRITONCLIENT_VERSION: "2.57.0"
+  NV_INGEST_PROTOBUF_VERSION: "5.29.6"
+  NV_INGEST_GRPCIO_VERSION: "1.67.1"
+  NV_INGEST_GRPCIO_TOOLS_VERSION: "1.67.1"
 
 jobs:
   prepare:
@@ -122,6 +126,11 @@ jobs:
     needs: prepare
     runs-on: ubuntu-24.04-arm
     steps:
+      - name: Checkout RAG release tooling
+        uses: actions/checkout@v5
+        with:
+          path: rag-source
+
       - name: Checkout pinned NV-Ingest source
         uses: actions/checkout@v5
         with:
@@ -129,6 +138,20 @@ jobs:
           ref: ${{ env.NV_INGEST_COMMIT }}
           path: nv-ingest-source
           persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install release helper dependency
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.2
+
+      - name: Pin NV-Ingest gRPC and protobuf dependencies
+        run: |
+          python rag-source/scripts/runai_arm64_release.py \
+            pin-nv-ingest-runtime-dependencies \
+            --source-dir nv-ingest-source
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -165,6 +188,33 @@ jobs:
           cache-to: type=gha,mode=max,scope=nv-ingest-arm64
           provenance: mode=max
           sbom: true
+
+      - name: Verify NV-Ingest runtime dependency compatibility
+        env:
+          IMAGE: ${{ needs.prepare.outputs.registry }}/nv-ingest:${{ needs.prepare.outputs.release_tag }}
+        run: |
+          docker pull "$IMAGE"
+          docker run --rm \
+            --entrypoint /opt/nv_ingest_runtime/bin/python \
+            -e NV_INGEST_TRITONCLIENT_VERSION \
+            -e NV_INGEST_PROTOBUF_VERSION \
+            -e NV_INGEST_GRPCIO_VERSION \
+            -e NV_INGEST_GRPCIO_TOOLS_VERSION \
+            "$IMAGE" -c '
+          import os
+          from importlib.metadata import version
+
+          expected = {
+              "tritonclient": os.environ["NV_INGEST_TRITONCLIENT_VERSION"],
+              "protobuf": os.environ["NV_INGEST_PROTOBUF_VERSION"],
+              "grpcio": os.environ["NV_INGEST_GRPCIO_VERSION"],
+              "grpcio-tools": os.environ["NV_INGEST_GRPCIO_TOOLS_VERSION"],
+          }
+          installed = {package: version(package) for package in expected}
+          assert installed == expected, (installed, expected)
+          import tritonclient.grpc
+          print("NV-Ingest runtime dependency check passed:", installed)
+          '
 
   package-and-release:
     name: Verify images and publish customized Helm chart
