@@ -213,9 +213,18 @@ jobs:
             --registry "${{ needs.prepare.outputs.registry }}" \
             --release-tag "${{ needs.prepare.outputs.release_tag }}" \
             --chart-version "${{ needs.prepare.outputs.chart_version }}"
+          runai_values="$release_dir/values-runai-gb300.yaml"
+          cp "$chart_dir/values-runai-gb300.yaml" "$runai_values"
+          effective_values="$release_dir/effective-values.yaml"
+          python scripts/runai_arm64_release.py merge-values \
+            --base "$chart_dir/values.yaml" \
+            --overlay "$runai_values" \
+            --output "$effective_values"
           cp nv-ingest-license/LICENSE "$release_dir/NV-INGEST-LICENSE-${{ env.NV_INGEST_VERSION }}.txt"
           echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
           echo "chart_dir=$chart_dir" >> "$GITHUB_OUTPUT"
+          echo "runai_values=$runai_values" >> "$GITHUB_OUTPUT"
+          echo "effective_values=$effective_values" >> "$GITHUB_OUTPUT"
 
       - name: Verify anonymous access to published ARM64 images
         env:
@@ -252,7 +261,7 @@ jobs:
         if: ${{ inputs.audit_external_images }}
         run: |
           python scripts/runai_arm64_release.py audit \
-            --values "${{ steps.workspace.outputs.chart_dir }}/values.yaml" \
+            --values "${{ steps.workspace.outputs.effective_values }}" \
             --markdown-output "${{ steps.workspace.outputs.release_dir }}/external-nim-images.md"
 
       - name: Record skipped external image audit
@@ -268,6 +277,8 @@ jobs:
         env:
           NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
           CHART_DIR: ${{ steps.workspace.outputs.chart_dir }}
+          RUNAI_VALUES: ${{ steps.workspace.outputs.runai_values }}
+          RELEASE_DIR: ${{ steps.workspace.outputs.release_dir }}
         run: |
           helm repo add nvidia https://helm.ngc.nvidia.com/nvidia/nemo-microservices \
             --username '$oauthtoken' --password "$NGC_API_KEY" --force-update
@@ -278,7 +289,52 @@ jobs:
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
           helm repo update
           helm dependency update "$CHART_DIR"
+          python scripts/runai_arm64_release.py patch-nv-ingest-chart \
+            --chart-dir "$CHART_DIR"
           helm lint "$CHART_DIR"
+          helm lint "$CHART_DIR" -f "$RUNAI_VALUES"
+          rendered="$RELEASE_DIR/runai-rendered.yaml"
+          helm template rag "$CHART_DIR" --namespace runai-nccl --api-versions apps.nvidia.com/v1alpha1 -f "$RUNAI_VALUES" > "$rendered"
+          python - "$rendered" <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          documents = [
+              document
+              for document in yaml.safe_load_all(Path(sys.argv[1]).read_text())
+              if isinstance(document, dict)
+          ]
+
+          def walk(value):
+              if isinstance(value, dict):
+                  yield value
+                  for child in value.values():
+                      yield from walk(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      yield from walk(child)
+
+          ngc_secret_names = {
+              reference["name"]
+              for document in documents
+              for node in walk(document)
+              if isinstance((reference := node.get("secretKeyRef")), dict)
+              and reference.get("key") == "NGC_API_KEY"
+          }
+          assert ngc_secret_names == {"genericsecret-aiq-credentials"}
+
+          nim_services = [
+              document
+              for document in documents
+              if document.get("kind") == "NIMService"
+          ]
+          assert len(nim_services) == 6
+          assert {
+              service["spec"]["authSecret"] for service in nim_services
+          } == {"genericsecret-aiq-credentials"}
+          PY
 
       - name: Package customized Helm chart
         env:
@@ -305,6 +361,7 @@ jobs:
             echo "NV-Ingest source: NVIDIA/NeMo-Retriever@$NV_INGEST_COMMIT (release $NV_INGEST_VERSION)."
             echo
             echo "Chart: $CHART_FILENAME"
+            echo "RUN:AI values: values-runai-gb300.yaml"
             echo
             echo "## Published images"
             echo
@@ -324,6 +381,7 @@ jobs:
         run: |
           gh release create "$RELEASE_TAG" \
             "$RELEASE_DIR/$CHART_FILENAME" \
+            "$RELEASE_DIR/values-runai-gb300.yaml" \
             "$RELEASE_DIR/NV-INGEST-LICENSE-${{ env.NV_INGEST_VERSION }}.txt" \
             "$RELEASE_DIR/published-images.md" \
             "$RELEASE_DIR/external-nim-images.md" \
@@ -341,11 +399,13 @@ jobs:
         run: |
           release_url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
           chart_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$CHART_FILENAME"
+          values_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/values-runai-gb300.yaml"
           {
             echo "## RUN:AI ARM64 release published"
             echo
             echo "- Release: $release_url"
             echo "- Helm chart: $chart_url"
+            echo "- RUN:AI values: $values_url"
             echo
             echo "### Published image manifests"
             echo
@@ -353,5 +413,5 @@ jobs:
             echo
             echo "### Install from the RUN:AI Helm deployment tool"
             echo
-            echo "    helm upgrade --install rag $chart_url --namespace nv-nvidia-blueprint-rag --create-namespace --set imagePullSecret.password=\"\$NGC_API_KEY\" --set ngcApiSecret.password=\"\$NGC_API_KEY\""
+            echo "    helm upgrade --install rag $chart_url --namespace runai-nccl -f $values_url"
           } >> "$GITHUB_STEP_SUMMARY"

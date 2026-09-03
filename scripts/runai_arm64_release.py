@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -96,6 +99,93 @@ def _required_mapping(
     if not isinstance(value, dict):
         raise ValueError(f"{context}.{key} must be a mapping")
     return value
+
+
+def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Return Helm-style recursively merged mappings without mutating inputs."""
+
+    merged = copy.deepcopy(base)
+    for key, overlay_value in overlay.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(overlay_value, dict):
+            merged[key] = deep_merge(base_value, overlay_value)
+        else:
+            merged[key] = copy.deepcopy(overlay_value)
+    return merged
+
+
+def merge_values(base_path: Path, overlay_path: Path, output_path: Path) -> None:
+    """Write the effective values used by a base chart plus one overlay."""
+
+    merged = deep_merge(
+        _load_yaml_mapping(base_path), _load_yaml_mapping(overlay_path)
+    )
+    output_path.write_text(
+        yaml.safe_dump(merged, sort_keys=False), encoding="utf-8"
+    )
+
+
+def patch_nv_ingest_dependency(chart_dir: Path) -> None:
+    """Make the pinned NV-Ingest chart's runtime NGC secret configurable."""
+
+    archives = sorted((chart_dir / "charts").glob("nv-ingest-*.tgz"))
+    directories = sorted(
+        path
+        for path in (chart_dir / "charts").glob("nv-ingest*")
+        if path.is_dir()
+    )
+    if len(archives) + len(directories) != 1:
+        raise ValueError(
+            "expected one nv-ingest dependency archive or directory, found "
+            f"{len(archives) + len(directories)}"
+        )
+    configurable_name = '{{ .Values.ngcApiSecret.name | default "ngc-api" }}'
+
+    def patch_tree(dependency_root: Path) -> None:
+        replacements = (
+            (
+                dependency_root / "templates" / "deployment.yaml",
+                "                  name: ngc-api",
+                f"                  name: {configurable_name}",
+            ),
+            (
+                dependency_root / "templates" / "secrets.yaml",
+                "  name: ngc-api  # Name expected by NIMs",
+                f"  name: {configurable_name}",
+            ),
+        )
+        for path, old, new in replacements:
+            content = path.read_text(encoding="utf-8")
+            if content.count(old) != 1:
+                raise ValueError(f"expected one NV-Ingest secret reference in {path}")
+            path.write_text(content.replace(old, new), encoding="utf-8")
+
+        values_path = dependency_root / "values.yaml"
+        values = _load_yaml_mapping(values_path)
+        ngc_secret = _required_mapping(values, "ngcApiSecret", "values")
+        ngc_secret["name"] = "ngc-api"
+        values_path.write_text(
+            yaml.safe_dump(values, sort_keys=False), encoding="utf-8"
+        )
+
+    if directories:
+        patch_tree(directories[0])
+        return
+
+    archive = archives[0]
+    with tempfile.TemporaryDirectory(prefix="runai-nv-ingest-") as temp_dir:
+        temp_path = Path(temp_dir)
+        with tarfile.open(archive, "r:gz") as bundle:
+            bundle.extractall(temp_path, filter="data")
+
+        roots = [path for path in temp_path.iterdir() if path.is_dir()]
+        if len(roots) != 1:
+            raise ValueError("NV-Ingest archive must contain one chart directory")
+        dependency_root = roots[0]
+        patch_tree(dependency_root)
+
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(dependency_root, arcname=dependency_root.name)
 
 
 def customize_chart(
@@ -314,6 +404,18 @@ def _customize_chart_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _merge_values_command(args: argparse.Namespace) -> int:
+    merge_values(args.base, args.overlay, args.output)
+    print(f"Wrote effective values to {args.output}")
+    return 0
+
+
+def _patch_nv_ingest_chart_command(args: argparse.Namespace) -> int:
+    patch_nv_ingest_dependency(args.chart_dir)
+    print(f"Patched NV-Ingest dependency in {args.chart_dir}")
+    return 0
+
+
 def _audit_command(args: argparse.Namespace) -> int:
     images = set(args.image)
     if args.values is not None:
@@ -358,6 +460,21 @@ def _build_parser() -> argparse.ArgumentParser:
     customize.add_argument("--release-tag", required=True)
     customize.add_argument("--chart-version", required=True)
     customize.set_defaults(handler=_customize_chart_command)
+
+    merge = subparsers.add_parser(
+        "merge-values", help="merge base and RUN:AI Helm values"
+    )
+    merge.add_argument("--base", required=True, type=Path)
+    merge.add_argument("--overlay", required=True, type=Path)
+    merge.add_argument("--output", required=True, type=Path)
+    merge.set_defaults(handler=_merge_values_command)
+
+    patch_nv_ingest = subparsers.add_parser(
+        "patch-nv-ingest-chart",
+        help="make the NV-Ingest runtime NGC secret name configurable",
+    )
+    patch_nv_ingest.add_argument("--chart-dir", required=True, type=Path)
+    patch_nv_ingest.set_defaults(handler=_patch_nv_ingest_chart_command)
 
     audit = subparsers.add_parser(
         "audit", help="require linux/arm64 manifests for remote images"

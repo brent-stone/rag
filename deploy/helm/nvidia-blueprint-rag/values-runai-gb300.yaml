@@ -1,0 +1,161 @@
+# RUN:AI overrides for an NVIDIA DGX GB300 cluster.
+#
+# This hybrid profile reuses the existing Nemotron Ultra and Super inference
+# workloads in runai-nccl while retaining the six chart-managed embedding,
+# reranking, and document-extraction NIMs.
+
+imagePullSecret:
+  name: dockerregistry-ngc-secret
+  create: false
+
+ngcApiSecret:
+  name: genericsecret-aiq-credentials
+  create: false
+
+apiKeysSecret:
+  create: false
+  existingSecret: ""
+
+service:
+  type: ClusterIP
+  port: 8081
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "8g"
+  hosts:
+    - host: nccl-rag-backend.runai.ai.nps.edu
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+envVars:
+  APP_LLM_MODELNAME: nvidia/nemotron-3-ultra-550b-a55b
+  APP_LLM_SERVERURL: http://orchestrator-nemo3-ultra-550b-stone-g320.runai-nccl.svc.cluster.local/v1
+  APP_QUERYREWRITER_MODELNAME: nvidia/nemotron-3-super-120b-a12b
+  APP_QUERYREWRITER_SERVERURL: http://planner-nemo3-super-120b-stone-g320.runai-nccl.svc.cluster.local/v1
+  APP_FILTEREXPRESSIONGENERATOR_MODELNAME: nvidia/nemotron-3-super-120b-a12b
+  APP_FILTEREXPRESSIONGENERATOR_SERVERURL: http://planner-nemo3-super-120b-stone-g320.runai-nccl.svc.cluster.local/v1
+  REFLECTION_LLM: nvidia/nemotron-3-super-120b-a12b
+  REFLECTION_LLM_SERVERURL: http://planner-nemo3-super-120b-stone-g320.runai-nccl.svc.cluster.local/v1
+  AGENTIC_PLANNER_LLM_MODEL: nvidia/nemotron-3-ultra-550b-a55b
+  AGENTIC_PLANNER_LLM_SERVERURL: http://orchestrator-nemo3-ultra-550b-stone-g320.runai-nccl.svc.cluster.local/v1
+  AGENTIC_TASK_LLM_MODEL: nvidia/nemotron-3-super-120b-a12b
+  AGENTIC_TASK_LLM_SERVERURL: http://planner-nemo3-super-120b-stone-g320.runai-nccl.svc.cluster.local/v1
+  AGENTIC_SEED_GEN_LLM_MODEL: nvidia/nemotron-3-super-120b-a12b
+  AGENTIC_SEED_GEN_LLM_SERVERURL: http://planner-nemo3-super-120b-stone-g320.runai-nccl.svc.cluster.local/v1
+  AGENTIC_SYNTHESIS_LLM_MODEL: nvidia/nemotron-3-ultra-550b-a55b
+  AGENTIC_SYNTHESIS_LLM_SERVERURL: http://orchestrator-nemo3-ultra-550b-stone-g320.runai-nccl.svc.cluster.local/v1
+  APP_VLM_MODELNAME: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  APP_VLM_SERVERURL: http://ingest-nemo3-nano-omni-stone-g320.runai-nccl.svc.cluster.local/v1
+
+ingestor-server:
+  imagePullSecret:
+    name: dockerregistry-ngc-secret
+    create: false
+  envVars:
+    SUMMARY_LLM: nvidia/nemotron-3-super-120b-a12b
+    SUMMARY_LLM_SERVERURL: http://planner-nemo3-super-120b-stone-g320.runai-nccl.svc.cluster.local/v1
+    APP_NVINGEST_CAPTIONMODELNAME: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+    APP_NVINGEST_CAPTIONENDPOINTURL: http://ingest-nemo3-nano-omni-stone-g320.runai-nccl.svc.cluster.local/v1/chat/completions
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 50Gi
+    mountPath: /data/
+    subPath: ""
+
+frontend:
+  imagePullSecret:
+    name: dockerregistry-ngc-secret
+    create: false
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "8g"
+    hosts:
+      - host: nccl-rag-frontend.runai.ai.nps.edu
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+nimOperator:
+  nim-llm:
+    enabled: false
+  nvidia-nim-llama-nemotron-embed-vl-1b-v2:
+    enabled: true
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+      requests:
+        nvidia.com/gpu: 1
+  nvidia-nim-llama-nemotron-rerank-1b-v2:
+    enabled: true
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+      requests:
+        nvidia.com/gpu: 1
+
+nv-ingest:
+  imagePullSecrets:
+    - name: dockerregistry-ngc-secret
+  ngcApiSecret:
+    name: genericsecret-aiq-credentials
+    create: false
+  nimOperator:
+    ocr:
+      enabled: true
+      authSecret: genericsecret-aiq-credentials
+      image:
+        pullSecrets:
+          - dockerregistry-ngc-secret
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+        requests:
+          nvidia.com/gpu: 1
+    page_elements:
+      enabled: true
+      authSecret: genericsecret-aiq-credentials
+      image:
+        pullSecrets:
+          - dockerregistry-ngc-secret
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+        requests:
+          nvidia.com/gpu: 1
+    graphic_elements:
+      enabled: true
+      authSecret: genericsecret-aiq-credentials
+      image:
+        pullSecrets:
+          - dockerregistry-ngc-secret
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+        requests:
+          nvidia.com/gpu: 1
+    table_structure:
+      enabled: true
+      authSecret: genericsecret-aiq-credentials
+      image:
+        pullSecrets:
+          - dockerregistry-ngc-secret
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+        requests:
+          nvidia.com/gpu: 1

@@ -75,6 +75,18 @@ service:
   type: ClusterIP
   port: 8081
 
+# -- Optional ingress for the RAG server API
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: rag.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
 # -- RAG server container resources
 resources:
   limits:
@@ -567,6 +579,18 @@ frontend:
   service:
     type: NodePort
     port: 3000
+
+  # -- Optional ingress for the RAG frontend
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: rag-frontend.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
 
   # -- Probes for frontend (optional)
   livenessProbe: {}
