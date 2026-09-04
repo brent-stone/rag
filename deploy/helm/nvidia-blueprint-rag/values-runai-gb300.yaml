@@ -3,6 +3,15 @@
 # This hybrid profile reuses the existing Nemotron Ultra and Super inference
 # workloads in runai-nccl while retaining the six chart-managed embedding,
 # reranking, and document-extraction NIMs.
+#
+# The extraction image versions and legacy /v1/infer + gRPC endpoints are
+# intentionally pinned to the NV-Ingest 26.3 contract. The native ARM64
+# application images are built from the forked NeMo-Retriever commit recorded
+# by the release workflow; the proprietary NIM images still require runtime
+# validation against the installed NIM Operator, driver, and GB300 platform.
+
+nodeSelector:
+  kubernetes.io/arch: arm64
 
 imagePullSecret:
   name: dockerregistry-ngc-secret
@@ -53,6 +62,8 @@ envVars:
   APP_VLM_SERVERURL: http://ingest-nemo3-nano-omni-stone-g320.runai-nccl.svc.cluster.local/v1
 
 ingestor-server:
+  nodeSelector:
+    kubernetes.io/arch: arm64
   imagePullSecret:
     name: dockerregistry-ngc-secret
     create: false
@@ -72,6 +83,8 @@ ingestor-server:
     subPath: ""
 
 frontend:
+  nodeSelector:
+    kubernetes.io/arch: arm64
   imagePullSecret:
     name: dockerregistry-ngc-secret
     create: false
@@ -95,6 +108,8 @@ nimOperator:
     enabled: false
   nvidia-nim-llama-nemotron-embed-vl-1b-v2:
     enabled: true
+    nodeSelector:
+      kubernetes.io/arch: arm64
     resources:
       limits:
         nvidia.com/gpu: 1
@@ -102,6 +117,8 @@ nimOperator:
         nvidia.com/gpu: 1
   nvidia-nim-llama-nemotron-rerank-1b-v2:
     enabled: true
+    nodeSelector:
+      kubernetes.io/arch: arm64
     resources:
       limits:
         nvidia.com/gpu: 1
@@ -109,16 +126,36 @@ nimOperator:
         nvidia.com/gpu: 1
 
 nv-ingest:
+  nodeSelector:
+    kubernetes.io/arch: arm64
   imagePullSecrets:
     - name: dockerregistry-ngc-secret
   ngcApiSecret:
     name: genericsecret-aiq-credentials
     create: false
+  envVars:
+    OCR_GRPC_ENDPOINT: nemotron-ocr-v1:8001
+    OCR_HTTP_ENDPOINT: http://nemotron-ocr-v1:8000/v1/infer
+    OCR_INFER_PROTOCOL: grpc
+    OCR_MODEL_NAME: pipeline
+    YOLOX_GRPC_ENDPOINT: nemotron-page-elements-v3:8001
+    YOLOX_HTTP_ENDPOINT: http://nemotron-page-elements-v3:8000/v1/infer
+    YOLOX_INFER_PROTOCOL: grpc
+    YOLOX_GRAPHIC_ELEMENTS_GRPC_ENDPOINT: nemotron-graphic-elements-v1:8001
+    YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT: http://nemotron-graphic-elements-v1:8000/v1/infer
+    YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL: grpc
+    YOLOX_TABLE_STRUCTURE_GRPC_ENDPOINT: nemotron-table-structure-v1:8001
+    YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT: http://nemotron-table-structure-v1:8000/v1/infer
+    YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL: grpc
   nimOperator:
     ocr:
       enabled: true
       authSecret: genericsecret-aiq-credentials
+      nodeSelector:
+        kubernetes.io/arch: arm64
       image:
+        repository: nvcr.io/nim/nvidia/nemotron-ocr-v1
+        tag: "1.3.0"
         pullSecrets:
           - dockerregistry-ngc-secret
       resources:
@@ -129,7 +166,11 @@ nv-ingest:
     page_elements:
       enabled: true
       authSecret: genericsecret-aiq-credentials
+      nodeSelector:
+        kubernetes.io/arch: arm64
       image:
+        repository: nvcr.io/nim/nvidia/nemotron-page-elements-v3
+        tag: "1.8.0"
         pullSecrets:
           - dockerregistry-ngc-secret
       resources:
@@ -140,7 +181,11 @@ nv-ingest:
     graphic_elements:
       enabled: true
       authSecret: genericsecret-aiq-credentials
+      nodeSelector:
+        kubernetes.io/arch: arm64
       image:
+        repository: nvcr.io/nim/nvidia/nemotron-graphic-elements-v1
+        tag: "1.8.0"
         pullSecrets:
           - dockerregistry-ngc-secret
       resources:
@@ -151,7 +196,11 @@ nv-ingest:
     table_structure:
       enabled: true
       authSecret: genericsecret-aiq-credentials
+      nodeSelector:
+        kubernetes.io/arch: arm64
       image:
+        repository: nvcr.io/nim/nvidia/nemotron-table-structure-v1
+        tag: "1.8.0"
         pullSecrets:
           - dockerregistry-ngc-secret
       resources:

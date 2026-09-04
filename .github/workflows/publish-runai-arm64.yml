@@ -24,9 +24,9 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  NV_INGEST_REPOSITORY: NVIDIA/NeMo-Retriever
+  NV_INGEST_REPOSITORY: brent-stone/NeMo-Retriever
   NV_INGEST_VERSION: "26.3.0"
-  NV_INGEST_COMMIT: b1aa9729809bd46c0b4f089ccd0ead946303eba3
+  NV_INGEST_COMMIT: 3199ee651a3f0aab64a39ef81d1f90b1b630f98c
   NV_INGEST_TRITONCLIENT_VERSION: "2.57.0"
   NV_INGEST_PROTOBUF_VERSION: "5.29.6"
   NV_INGEST_GRPCIO_VERSION: "1.67.1"
@@ -180,7 +180,7 @@ jobs:
           secrets: |
             hf_token=${{ secrets.HF_ACCESS_TOKEN }}
           labels: |
-            org.opencontainers.image.source=https://github.com/NVIDIA/NeMo-Retriever
+            org.opencontainers.image.source=https://github.com/${{ env.NV_INGEST_REPOSITORY }}
             org.opencontainers.image.revision=${{ env.NV_INGEST_COMMIT }}
             org.opencontainers.image.version=${{ env.NV_INGEST_VERSION }}
             org.opencontainers.image.licenses=Apache-2.0
@@ -408,7 +408,10 @@ jobs:
             echo
             echo "Built natively for linux/arm64 for NVIDIA DGX GB300 testing."
             echo
-            echo "NV-Ingest source: NVIDIA/NeMo-Retriever@$NV_INGEST_COMMIT (release $NV_INGEST_VERSION)."
+            echo "NV-Ingest source: $NV_INGEST_REPOSITORY@$NV_INGEST_COMMIT (release $NV_INGEST_VERSION)."
+            echo
+            echo "The external extraction NIM audit confirms linux/arm64 OCI manifests; it does not certify their runtime compatibility with GB300."
+            echo "This release preserves the NV-Ingest 26.3 /v1/infer and gRPC contract and does not migrate to the incompatible 2.0 extraction APIs."
             echo
             echo "Chart: $CHART_FILENAME"
             echo "RUN:AI values: values-runai-gb300.yaml"

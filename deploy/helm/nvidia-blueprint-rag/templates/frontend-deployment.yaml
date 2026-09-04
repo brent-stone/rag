@@ -21,6 +21,18 @@ spec:
         app.kubernetes.io/component: rag-frontend
         {{- include "nvidia-blueprint-rag.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if $cfg.nodeSelector }}
+      nodeSelector:
+{{ toYaml $cfg.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if $cfg.affinity }}
+      affinity:
+{{ toYaml $cfg.affinity | nindent 8 }}
+      {{- end }}
+      {{- if $cfg.tolerations }}
+      tolerations:
+{{ toYaml $cfg.tolerations | nindent 8 }}
+      {{- end }}
       {{- if $cfg.imagePullSecret.name }}
       imagePullSecrets:
         - name: {{ $cfg.imagePullSecret.name }}

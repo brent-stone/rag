@@ -205,9 +205,12 @@ def pin_nv_ingest_runtime_dependencies(source_dir: Path) -> None:
     for relative_path in (Path("api/pyproject.toml"), Path("src/pyproject.toml")):
         path = source_dir / relative_path
         content = path.read_text(encoding="utf-8")
+        if all(f'    "{dependency}",' in content for dependency in dependency_pins):
+            continue
         if content.count(unbounded_dependency) != 1:
             raise ValueError(
-                f"expected one unbounded tritonclient dependency in {path}"
+                "expected either the complete pinned runtime stack or one "
+                f"unbounded tritonclient dependency in {path}"
             )
         path.write_text(
             content.replace(unbounded_dependency, pinned_dependencies),

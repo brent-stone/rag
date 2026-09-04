@@ -18,6 +18,11 @@ PROFILE_PATH = CHART_DIR / "values-runai-gb300.yaml"
 DEFAULT_VALUES_PATH = CHART_DIR / "values.yaml"
 INGRESS_TEMPLATE_PATH = CHART_DIR / "templates" / "ingress.yaml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-runai-arm64.yml"
+FRONTEND_TEMPLATE_PATH = CHART_DIR / "templates" / "frontend-deployment.yaml"
+
+NV_INGEST_REPOSITORY = "brent-stone/NeMo-Retriever"
+NV_INGEST_COMMIT = "3199ee651a3f0aab64a39ef81d1f90b1b630f98c"
+ARM64_NODE_SELECTOR = {"kubernetes.io/arch": "arm64"}
 
 ULTRA_URL = (
     "http://orchestrator-nemo3-ultra-550b-stone-g320."
@@ -108,6 +113,67 @@ def test_runai_profile_keeps_six_chart_managed_nims() -> None:
     assert gpu_total == 6
 
 
+def test_runai_profile_pins_legacy_extraction_fleet_and_api_contract() -> None:
+    values = _load_yaml(PROFILE_PATH)
+    nv_ingest = values["nv-ingest"]
+
+    expected_images = {
+        "ocr": ("nvcr.io/nim/nvidia/nemotron-ocr-v1", "1.3.0"),
+        "page_elements": (
+            "nvcr.io/nim/nvidia/nemotron-page-elements-v3",
+            "1.8.0",
+        ),
+        "graphic_elements": (
+            "nvcr.io/nim/nvidia/nemotron-graphic-elements-v1",
+            "1.8.0",
+        ),
+        "table_structure": (
+            "nvcr.io/nim/nvidia/nemotron-table-structure-v1",
+            "1.8.0",
+        ),
+    }
+    for name, (repository, tag) in expected_images.items():
+        image = nv_ingest["nimOperator"][name]["image"]
+        assert image["repository"] == repository
+        assert image["tag"] == tag
+
+    env = nv_ingest["envVars"]
+    assert env["OCR_GRPC_ENDPOINT"] == "nemotron-ocr-v1:8001"
+    assert env["OCR_HTTP_ENDPOINT"].endswith("/v1/infer")
+    assert env["OCR_INFER_PROTOCOL"] == "grpc"
+    for prefix in (
+        "YOLOX",
+        "YOLOX_GRAPHIC_ELEMENTS",
+        "YOLOX_TABLE_STRUCTURE",
+    ):
+        assert env[f"{prefix}_HTTP_ENDPOINT"].endswith("/v1/infer")
+        assert env[f"{prefix}_INFER_PROTOCOL"] == "grpc"
+
+    serialized = PROFILE_PATH.read_text(encoding="utf-8")
+    assert "nemotron-object-detection" not in serialized
+
+
+def test_runai_profile_schedules_arm64_workloads_explicitly() -> None:
+    values = _load_yaml(PROFILE_PATH)
+
+    assert values["nodeSelector"] == ARM64_NODE_SELECTOR
+    assert values["ingestor-server"]["nodeSelector"] == ARM64_NODE_SELECTOR
+    assert values["frontend"]["nodeSelector"] == ARM64_NODE_SELECTOR
+    assert values["nv-ingest"]["nodeSelector"] == ARM64_NODE_SELECTOR
+
+    for name in (
+        "nvidia-nim-llama-nemotron-embed-vl-1b-v2",
+        "nvidia-nim-llama-nemotron-rerank-1b-v2",
+    ):
+        assert values["nimOperator"][name]["nodeSelector"] == ARM64_NODE_SELECTOR
+
+    for name in ("ocr", "page_elements", "graphic_elements", "table_structure"):
+        assert (
+            values["nv-ingest"]["nimOperator"][name]["nodeSelector"]
+            == ARM64_NODE_SELECTOR
+        )
+
+
 def test_runai_profile_references_existing_secrets_and_ingresses() -> None:
     values = _load_yaml(PROFILE_PATH)
 
@@ -169,6 +235,13 @@ def test_ingress_template_routes_backend_and_frontend_services() -> None:
     assert ".Values.frontend.service.port" in template
 
 
+def test_frontend_template_applies_configured_node_selector() -> None:
+    template = FRONTEND_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    assert "if $cfg.nodeSelector" in template
+    assert "toYaml $cfg.nodeSelector" in template
+
+
 def test_arm64_release_validates_and_publishes_runai_values() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -186,10 +259,20 @@ def test_arm64_release_validates_and_publishes_runai_values() -> None:
     assert '"$RELEASE_DIR/values-runai-gb300.yaml"' in workflow
     assert "values_url=" in workflow
     assert 'echo "- RUN:AI values: $values_url"' in workflow
+    assert "does not certify their runtime compatibility with GB300" in workflow
+    assert "preserves the NV-Ingest 26.3 /v1/infer and gRPC contract" in workflow
 
 
 def test_arm64_release_pins_and_validates_nv_ingest_grpc_stack() -> None:
     workflow = _load_yaml(WORKFLOW_PATH)
+
+    assert workflow["env"]["NV_INGEST_REPOSITORY"] == NV_INGEST_REPOSITORY
+    assert workflow["env"]["NV_INGEST_COMMIT"] == NV_INGEST_COMMIT
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert (
+        "org.opencontainers.image.source=https://github.com/"
+        "${{ env.NV_INGEST_REPOSITORY }}" in workflow_text
+    )
 
     assert (
         workflow["env"]
@@ -320,6 +403,35 @@ def test_pin_nv_ingest_runtime_dependencies_replaces_unbounded_grpc_stack(
         dependencies = set(project["dependencies"])
         assert expected_pins <= dependencies
         assert "tritonclient" not in dependencies
+
+
+def test_pin_nv_ingest_runtime_dependencies_accepts_already_pinned_source(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "nv-ingest-source"
+    pinned_dependencies = (
+        '    "tritonclient[grpc]==2.57.0",\n'
+        '    "protobuf==5.29.6",\n'
+        '    "grpcio==1.67.1",\n'
+        '    "grpcio-tools==1.67.1",\n'
+    )
+    original_contents = {}
+    for component in ("api", "src"):
+        component_dir = source_dir / component
+        component_dir.mkdir(parents=True)
+        path = component_dir / "pyproject.toml"
+        content = (
+            '[project]\nname = "nv-ingest-test"\ndependencies = [\n'
+            f"{pinned_dependencies}"
+            "]\n"
+        )
+        path.write_text(content, encoding="utf-8")
+        original_contents[path] = content
+
+    runai_release.pin_nv_ingest_runtime_dependencies(source_dir)
+
+    for path, content in original_contents.items():
+        assert path.read_text(encoding="utf-8") == content
 
 
 def test_pin_nv_ingest_runtime_dependencies_cli_patches_source_tree(

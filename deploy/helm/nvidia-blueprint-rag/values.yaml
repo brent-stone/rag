@@ -565,6 +565,11 @@ frontend:
 
   replicaCount: 1
 
+  # -- Frontend pod scheduling
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
   image:
     repository: nvcr.io/nvstaging/blueprint/rag-frontend
     pullPolicy: IfNotPresent
