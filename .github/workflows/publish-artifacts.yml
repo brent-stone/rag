@@ -2,9 +2,9 @@ name: Publish Artifacts
 
 # Workflow control - runs nightly or on manual trigger
 on:
-  schedule:
-    # Run nightly at 6.30 PM UTC or 12 AM IST
-    - cron: '30 18 * * *'
+#  schedule:
+#    # Run nightly at 6.30 PM UTC or 12 AM IST
+#    - cron: '30 18 * * *'
   workflow_dispatch:
     inputs:
       JOBS_TO_RUN:

@@ -21,8 +21,8 @@ on:
   push:
     branches:
       - "pull-request/[0-9]+"
-  schedule:
-    - cron: "0 2 * * *" # 2am UTC nightly — all rag-* cpu skills
+#  schedule:
+#    - cron: "0 2 * * *" # 2am UTC nightly — all rag-* cpu skills
   workflow_dispatch:
     inputs:
       skills:
